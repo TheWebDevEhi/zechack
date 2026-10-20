@@ -15,7 +15,8 @@ import {
   Layers,
   Radio,
   Clock,
-  Code
+  Code,
+  RotateCcw
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -195,6 +196,28 @@ export default function App() {
     }
   };
 
+  const handleResetData = async (keepKeys: boolean = false) => {
+    const confirmed = window.confirm(
+      keepKeys
+        ? 'Clear all transaction history and webhook delivery logs?'
+        : 'Wipe all database records (transactions, webhooks, and keys) to start completely clean?'
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch('/api/v1/system/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_keys: keepKeys }),
+      });
+      const data = await res.json();
+      showToast(data.message || 'Database reset successfully!');
+      fetchData();
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Toast Notification */}
@@ -253,6 +276,17 @@ export default function App() {
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             <span>Sync</span>
+          </button>
+
+          <button
+            id="reset-db-btn"
+            className="btn btn-secondary btn-sm"
+            onClick={() => handleResetData(false)}
+            title="Wipe database and reset to clean state"
+            style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+          >
+            <RotateCcw size={14} />
+            <span>Reset Data</span>
           </button>
 
           <button

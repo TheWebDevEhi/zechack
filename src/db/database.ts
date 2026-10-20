@@ -350,6 +350,25 @@ export class DatabaseService {
       totalZat: notesRes[1] as number
     };
   }
+
+  // --- Reset Database ---
+  public resetDatabase(options: { keepKeys?: boolean } = {}): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (options.keepKeys) {
+      this.db.run(`
+        DELETE FROM shielded_notes;
+        DELETE FROM webhook_deliveries;
+      `);
+    } else {
+      this.db.run(`
+        DELETE FROM shielded_notes;
+        DELETE FROM webhook_deliveries;
+        DELETE FROM webhooks;
+        DELETE FROM viewing_keys;
+      `);
+    }
+    this.save();
+  }
 }
 
 export const dbService = new DatabaseService();

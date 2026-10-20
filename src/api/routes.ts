@@ -163,3 +163,19 @@ apiRouter.post('/simulator/simulate', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// --- System & Database Reset ---
+apiRouter.post('/system/reset', (req: Request, res: Response) => {
+  try {
+    const keepKeys = req.body?.keep_keys === true;
+    dbService.resetDatabase({ keepKeys });
+    res.json({
+      message: keepKeys
+        ? 'Shielded notes and webhook deliveries cleared. Monitored keys retained.'
+        : 'Database reset completely. All keys, notes, and webhooks wiped.',
+      status: 'ok'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});

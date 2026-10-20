@@ -9,6 +9,7 @@
     "dev:dashboard": "npm --prefix dashboard run dev",
     "build:dashboard": "npm --prefix dashboard run build",
     "build": "npm run build:dashboard",
+    "db:reset": "tsx scripts/reset-db.ts",
     "test:api": "tsx scripts/test-api.ts",
     "test:webhook": "tsx scripts/test-webhook-live.ts",
     "test:grpc": "tsx scripts/test-grpc.ts"
