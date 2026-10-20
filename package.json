@@ -6,6 +6,11 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "dev:dashboard": "npm --prefix dashboard run dev",
+    "build:dashboard": "npm --prefix dashboard run build",
+    "build": "npm run build:dashboard",
+    "test:api": "tsx scripts/test-api.ts",
+    "test:webhook": "tsx scripts/test-webhook-live.ts",
     "test:grpc": "tsx scripts/test-grpc.ts"
   },
   "keywords": [
