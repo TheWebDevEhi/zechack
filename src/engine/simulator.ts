@@ -6,8 +6,11 @@ export interface SimulatePaymentOptions {
   keyId?: number;
   amountZec: number;
   memo: string;
-  pool?: 'Orchard' | 'Sapling';
+  pool?: string;
   transferType?: 'incoming' | 'outgoing' | 'internal';
+  txid?: string;
+  blockHeight?: number;
+  isSimulated?: number;
 }
 
 export class PaymentSimulator {
@@ -30,14 +33,14 @@ export class PaymentSimulator {
       }
     }
 
-    const txid = crypto.randomBytes(32).toString('hex');
+    const txid = options.txid || crypto.randomBytes(32).toString('hex');
     const now = Math.floor(Date.now() / 1000);
     const amountZec = options.amountZec || 0.5;
     const amountZat = Math.round(amountZec * 100_000_000);
 
     // Get an approximate block height from existing records or default
     const existing = dbService.getShieldedNotes(1);
-    const blockHeight = existing.length > 0 ? existing[0].block_height + 1 : 4520000;
+    const blockHeight = options.blockHeight || (existing.length > 0 ? existing[0].block_height + 1 : 4520000);
 
     const noteRecord = dbService.addShieldedNote({
       key_id: targetKeyId,
@@ -48,8 +51,8 @@ export class PaymentSimulator {
       amount_zat: amountZat,
       amount_zec: amountZec,
       transfer_type: options.transferType || 'incoming',
-      memo_text: options.memo || 'Invoice #ZEC-HACKATHON-DEMO paid via Shielded Zcash',
-      is_simulated: 1
+      memo_text: options.memo || '',
+      is_simulated: options.isSimulated !== undefined ? options.isSimulated : 1
     });
 
     if (!noteRecord) {

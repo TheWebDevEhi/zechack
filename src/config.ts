@@ -19,6 +19,6 @@ export const config: AppConfig = {
   network: isMainnet ? 'mainnet' : 'testnet',
   lightwalletdUrl: process.env.LIGHTWALLETD_URL || (isMainnet ? 'https://na.zec.rocks:443' : 'https://testnet.zec.rocks:443'),
   dbPath: process.env.DB_PATH || path.resolve(process.cwd(), 'data', 'zecshield.db'),
-  syncIntervalMs: parseInt(process.env.SYNC_INTERVAL_MS || '15000', 10), // check for new blocks every 15s
-  batchSize: parseInt(process.env.BATCH_SIZE || '100', 10),
+  syncIntervalMs: parseInt(process.env.SYNC_INTERVAL_MS || '10000', 10), // check for new blocks every 10s
+  batchSize: parseInt(process.env.BATCH_SIZE || '500', 10),
 };

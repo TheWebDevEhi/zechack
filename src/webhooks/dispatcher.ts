@@ -32,7 +32,7 @@ export class WebhookDispatcher {
     const payloadJson = JSON.stringify(payload);
 
     for (const webhook of activeWebhooks) {
-      this.sendWithRetry(webhook, note.id, payloadJson, 3);
+      await this.sendWithRetry(webhook, note.id, payloadJson, 3);
     }
   }
 

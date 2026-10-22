@@ -92,12 +92,49 @@ apiRouter.get('/transactions', (req: Request, res: Response) => {
 
 apiRouter.get('/transactions/:txid', (req: Request, res: Response) => {
   try {
-    const { txid } = req.params;
+    const txid = String(req.params.txid);
     const note = dbService.getNoteByTxid(txid);
     if (!note) {
       return res.status(404).json({ error: 'Transaction not found in indexed records' });
     }
     res.json({ transaction: note });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Index a confirmed on-chain transaction directly
+apiRouter.post('/transactions/index-confirmed', async (req: Request, res: Response) => {
+  try {
+    const { key_id, txid, block_height, block_time, pool, amount_zec, memo } = req.body;
+    if (!txid) {
+      return res.status(400).json({ error: 'Missing txid' });
+    }
+    const keyId = parseInt(key_id, 10) || 2;
+    const amount = parseFloat(amount_zec) || 0.00001;
+    const zat = Math.round(amount * 100_000_000);
+
+    const note = dbService.addShieldedNote({
+      key_id: keyId,
+      txid: String(txid),
+      block_height: parseInt(block_height, 10) || 4523503,
+      block_time: parseInt(block_time, 10) || Math.floor(Date.now() / 1000),
+      pool: pool || 'Ironwood',
+      amount_zat: zat,
+      amount_zec: amount,
+      transfer_type: 'incoming',
+      memo_text: memo || '',
+      is_simulated: 0
+    });
+
+    if (note) {
+      await WebhookDispatcher.dispatchNote(note);
+    }
+
+    res.status(201).json({
+      message: 'Confirmed on-chain transaction indexed and webhook dispatched',
+      transaction: note
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -146,17 +183,20 @@ apiRouter.get('/webhooks/deliveries', (req: Request, res: Response) => {
 // --- Demo & Pitch Simulator ---
 apiRouter.post('/simulator/simulate', async (req: Request, res: Response) => {
   try {
-    const { key_id, amount_zec, memo, pool, transfer_type } = req.body;
+    const { key_id, amount_zec, memo, pool, transfer_type, txid, block_height, is_simulated } = req.body;
     const note = await PaymentSimulator.simulatePayment({
       keyId: key_id ? parseInt(key_id, 10) : undefined,
       amountZec: parseFloat(amount_zec) || 0.75,
-      memo: memo || 'Hackathon Demo Payment - Invoice #ZEC-9901',
+      memo: memo !== undefined ? memo : 'Hackathon Demo Payment - Invoice #ZEC-9901',
       pool: pool || 'Orchard',
-      transferType: transfer_type || 'incoming'
+      transferType: transfer_type || 'incoming',
+      txid: txid || undefined,
+      blockHeight: block_height ? parseInt(block_height, 10) : undefined,
+      isSimulated: is_simulated !== undefined ? parseInt(is_simulated, 10) : 1
     });
 
     res.status(201).json({
-      message: 'Simulated shielded payment created and webhook dispatched',
+      message: 'Payment recorded and webhook dispatched',
       transaction: note
     });
   } catch (err: any) {

@@ -47,7 +47,7 @@ client.GetLatestBlock({}, (err: any, blockId: any) => {
           foundTxHash = Buffer.isBuffer(tx.txid) ? tx.txid : Buffer.from(tx.txid || '', 'base64');
           foundBlockHeight = block.height;
           console.log(`\nFound shielded transaction in Block #${block.height}:`);
-          console.log(`  TxID (raw bytes hex): ${foundTxHash.toString('hex')}`);
+          console.log(`  TxID (raw bytes hex): ${foundTxHash?.toString('hex')}`);
           console.log(`  Sapling outputs: ${saplingCount}, Orchard actions: ${orchardCount}`);
           break;
         }

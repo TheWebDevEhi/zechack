@@ -10,8 +10,9 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json());
 
-  // Mount API routes
+  // Mount API routes (support both /api/v1 and /api)
   app.use('/api/v1', apiRouter);
+  app.use('/api', apiRouter);
 
   // Serve static dashboard if built
   const dashboardDist = path.resolve(process.cwd(), 'dashboard', 'dist');

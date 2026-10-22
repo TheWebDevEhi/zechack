@@ -66,76 +66,86 @@ export class ChainSyncer {
       return; // Already up to date
     }
 
-    const endHeight = Math.min(chainTip, startHeight + config.batchSize);
+    const batchSize = Math.max(config.batchSize, 500);
 
-    try {
-      console.log(`[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) from block ${startHeight} to ${endHeight} (tip: ${chainTip})...`);
+    // Fast catch-up loop: continuously process batches until caught up to chainTip
+    while (startHeight < chainTip && this.isRunning) {
+      const endHeight = Math.min(chainTip, startHeight + batchSize);
 
-      const stream = await startSync({
-        grpcUrl: config.lightwalletdUrl,
-        viewingKey: key.key_string,
-        startHeight,
-        endHeight,
-        network: config.network,
-        maxRetries: 2
-      });
+      try {
+        console.log(`[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) blocks ${startHeight} to ${endHeight} (tip: ${chainTip})...`);
 
-      let tx: ShieldedTransaction | null;
-      let matchedCount = 0;
+        const stream = await startSync({
+          grpcUrl: config.lightwalletdUrl,
+          viewingKey: key.key_string,
+          startHeight,
+          endHeight,
+          network: config.network,
+          maxRetries: 3
+        });
 
-      while ((tx = await stream.next()) !== null) {
-        matchedCount++;
-        console.log(`[Syncer] Match found! TxID: ${tx.txid} in block ${tx.blockHeight}`);
+        let tx: ShieldedTransaction | null;
+        let matchedCount = 0;
 
-        // Process Orchard Notes
-        if (tx.orchardNotes && tx.orchardNotes.length > 0) {
-          for (const note of tx.orchardNotes) {
-            const saved = dbService.addShieldedNote({
-              key_id: key.id,
-              txid: tx.txid,
-              block_height: tx.blockHeight,
-              block_time: tx.blockTime,
-              pool: 'Orchard',
-              amount_zat: note.amount,
-              amount_zec: note.amount / 100_000_000,
-              transfer_type: note.transferType,
-              memo_text: note.memo,
-              is_simulated: 0
-            });
-            if (saved) {
-              await WebhookDispatcher.dispatchNote(saved);
+        while ((tx = await stream.next()) !== null) {
+          matchedCount++;
+          console.log(`[Syncer] Match found! TxID: ${tx.txid} in block ${tx.blockHeight}`);
+
+          // Process Orchard Notes
+          if (tx.orchardNotes && tx.orchardNotes.length > 0) {
+            for (const note of tx.orchardNotes) {
+              const saved = dbService.addShieldedNote({
+                key_id: key.id,
+                txid: tx.txid,
+                block_height: tx.blockHeight,
+                block_time: tx.blockTime,
+                pool: 'Orchard',
+                amount_zat: note.amount,
+                amount_zec: note.amount / 100_000_000,
+                transfer_type: note.transferType,
+                memo_text: note.memo,
+                is_simulated: 0
+              });
+              if (saved) {
+                console.log(`[Syncer] Dispatched Orchard note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                await WebhookDispatcher.dispatchNote(saved);
+              }
+            }
+          }
+
+          // Process Sapling Notes
+          if (tx.saplingNotes && tx.saplingNotes.length > 0) {
+            for (const note of tx.saplingNotes) {
+              const saved = dbService.addShieldedNote({
+                key_id: key.id,
+                txid: tx.txid,
+                block_height: tx.blockHeight,
+                block_time: tx.blockTime,
+                pool: 'Sapling',
+                amount_zat: note.amount,
+                amount_zec: note.amount / 100_000_000,
+                transfer_type: note.transferType,
+                memo_text: note.memo,
+                is_simulated: 0
+              });
+              if (saved) {
+                console.log(`[Syncer] Dispatched Sapling note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                await WebhookDispatcher.dispatchNote(saved);
+              }
             }
           }
         }
 
-        // Process Sapling Notes
-        if (tx.saplingNotes && tx.saplingNotes.length > 0) {
-          for (const note of tx.saplingNotes) {
-            const saved = dbService.addShieldedNote({
-              key_id: key.id,
-              txid: tx.txid,
-              block_height: tx.blockHeight,
-              block_time: tx.blockTime,
-              pool: 'Sapling',
-              amount_zat: note.amount,
-              amount_zec: note.amount / 100_000_000,
-              transfer_type: note.transferType,
-              memo_text: note.memo,
-              is_simulated: 0
-            });
-            if (saved) {
-              await WebhookDispatcher.dispatchNote(saved);
-            }
-          }
-        }
+        // Update checkpoint after each successful batch
+        dbService.updateLastScannedHeight(key.id, endHeight);
+        startHeight = endHeight;
+      } catch (err: any) {
+        console.error(`[Syncer] Scan error for key #${key.id} in range ${startHeight}-${endHeight}:`, err.message);
+        // Advance slightly so syncer is not stuck forever, then wait for next cycle
+        startHeight = Math.min(chainTip, startHeight + 100);
+        dbService.updateLastScannedHeight(key.id, startHeight);
+        break;
       }
-
-      // Update checkpoint after successful scan
-      dbService.updateLastScannedHeight(key.id, endHeight);
-    } catch (err: any) {
-      console.error(`[Syncer] Scan error for key #${key.id}:`, err.message);
-      // Advance by small increment on error so syncer is not stuck forever on bad block
-      dbService.updateLastScannedHeight(key.id, Math.min(chainTip, startHeight + 10));
     }
   }
 }
