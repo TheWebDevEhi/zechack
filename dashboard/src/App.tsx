@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Shield,
+  Search,
   Activity,
   Key,
   Webhook,
@@ -8,16 +9,17 @@ import {
   FileCode,
   RefreshCw,
   Copy,
-  Check,
   Zap,
   Lock,
-  Server,
-  Layers,
   Radio,
-  Clock,
-  Code,
   RotateCcw,
-  Trash2
+  Trash2,
+  ArrowUpRight,
+  Plus,
+  ChevronRight,
+  CheckCircle2,
+  AlertCircle,
+  Sparkles
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -43,8 +45,6 @@ interface ViewingKey {
   last_scanned_height: number;
   is_active: number;
   created_at: number;
-  sync_percent: number;
-  is_synced: boolean;
 }
 
 interface ShieldedTransaction {
@@ -88,12 +88,22 @@ export default function App() {
   const [transactions, setTransactions] = useState<ShieldedTransaction[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookRecord[]>([]);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [, setLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  // Filters & search
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [poolFilter, setPoolFilter] = useState<'ALL' | 'Ironwood' | 'Orchard' | 'Sapling'>('ALL');
 
   // Forms state
   const [newKey, setNewKey] = useState({ key: '', label: '', birth_height: '4500000', key_type: 'UFVK' });
   const [newWebhook, setNewWebhook] = useState({ target_url: '', description: '', secret: '' });
-  const [simParams, setSimParams] = useState<{ amount_zec: string; memo: string; pool: 'Orchard' | 'Sapling' | 'Ironwood' }>({ amount_zec: '1.25', memo: 'Invoice #ZEC-9012 - Paid with Shielded Zcash', pool: 'Ironwood' });
+  const [simParams, setSimParams] = useState<{ amount_zec: string; memo: string; pool: 'Orchard' | 'Sapling' | 'Ironwood'; transfer_type: 'incoming' | 'outgoing' | 'internal' }>({
+    amount_zec: '0.02',
+    memo: 'Invoice #ZEC-9012 - Paid with Shielded Zcash',
+    pool: 'Ironwood',
+    transfer_type: 'incoming'
+  });
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -107,24 +117,26 @@ export default function App() {
   };
 
   const fetchData = async () => {
+    setIsRefreshing(true);
     try {
       const [statusRes, keysRes, txRes, webhooksRes, deliveriesRes] = await Promise.all([
-        fetch('/api/v1/status').then((r) => r.json()),
-        fetch('/api/v1/keys').then((r) => r.json()),
-        fetch('/api/v1/transactions').then((r) => r.json()),
-        fetch('/api/v1/webhooks').then((r) => r.json()),
-        fetch('/api/v1/webhooks/deliveries').then((r) => r.json()),
+        fetch('/api/v1/status').then((r) => r.json()).catch(() => null),
+        fetch('/api/v1/keys').then((r) => r.json()).catch(() => null),
+        fetch('/api/v1/transactions').then((r) => r.json()).catch(() => null),
+        fetch('/api/v1/webhooks').then((r) => r.json()).catch(() => null),
+        fetch('/api/v1/webhooks/deliveries').then((r) => r.json()).catch(() => null),
       ]);
 
-      if (statusRes.status === 'ok') setStatus(statusRes);
-      if (keysRes.keys) setKeys(keysRes.keys);
-      if (txRes.transactions) setTransactions(txRes.transactions);
-      if (webhooksRes.webhooks) setWebhooks(webhooksRes.webhooks);
-      if (deliveriesRes.deliveries) setDeliveries(deliveriesRes.deliveries);
+      if (statusRes && statusRes.status === 'ok') setStatus(statusRes);
+      if (keysRes && keysRes.keys) setKeys(keysRes.keys);
+      if (txRes && txRes.transactions) setTransactions(txRes.transactions);
+      if (webhooksRes && webhooksRes.webhooks) setWebhooks(webhooksRes.webhooks);
+      if (deliveriesRes && deliveriesRes.deliveries) setDeliveries(deliveriesRes.deliveries);
     } catch (err: any) {
       console.error('Fetch error:', err);
     } finally {
       setLoading(false);
+      setTimeout(() => setIsRefreshing(false), 500);
     }
   };
 
@@ -141,15 +153,36 @@ export default function App() {
       const res = await fetch('/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newKey),
+        body: JSON.stringify({
+          key: newKey.key.trim(),
+          label: newKey.label.trim() || undefined,
+          birth_height: parseInt(newKey.birth_height, 10) || 0,
+          key_type: newKey.key_type
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        showToast('Viewing Key registered successfully!');
+        showToast('Viewing Key registered and scanner queued!');
         setNewKey({ key: '', label: '', birth_height: '4500000', key_type: 'UFVK' });
         fetchData();
       } else {
         showToast(data.error || 'Failed to register key', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleDeleteKey = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this viewing key and its associated notes?')) return;
+    try {
+      const res = await fetch(`/api/v1/keys/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Viewing Key deleted successfully!');
+        fetchData();
+      } else {
+        showToast(data.error || 'Failed to delete key', 'error');
       }
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -163,932 +196,1218 @@ export default function App() {
       const res = await fetch('/api/v1/webhooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newWebhook),
+        body: JSON.stringify({
+          target_url: newWebhook.target_url.trim(),
+          description: newWebhook.description.trim() || undefined,
+          secret: newWebhook.secret.trim() || undefined
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        showToast('Webhook registered successfully!');
+        showToast('Webhook endpoint configured successfully!');
         setNewWebhook({ target_url: '', description: '', secret: '' });
         fetchData();
       } else {
-        showToast(data.error || 'Failed to register webhook', 'error');
+        showToast(data.error || 'Failed to create webhook', 'error');
       }
     } catch (err: any) {
       showToast(err.message, 'error');
     }
   };
 
-  const handleSimulatePayment = async () => {
-    try {
-      const res = await fetch('/api/v1/simulator/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(simParams),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(`Simulated ${simParams.amount_zec} ZEC payment & dispatched webhook!`);
-        fetchData();
-      } else {
-        showToast(data.error || 'Simulation failed', 'error');
-      }
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
-  };
-
-  const handleResetData = async (keepKeys: boolean = false) => {
-    const confirmed = window.confirm(
-      keepKeys
-        ? 'Clear all transaction history and webhook delivery logs?'
-        : 'Wipe all database records (transactions, webhooks, and keys) to start completely clean?'
-    );
-    if (!confirmed) return;
-
-    try {
-      const res = await fetch('/api/v1/system/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keep_keys: keepKeys }),
-      });
-      const data = await res.json();
-      showToast(data.message || 'Database reset successfully!');
-      fetchData();
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
-  };
-
-  const handleDeleteKey = async (id: number, label: string) => {
-    const confirmed = window.confirm(`Remove viewing key "${label}" (#${id}) and its indexed notes?`);
-    if (!confirmed) return;
-    try {
-      const res = await fetch(`/api/v1/keys/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('Viewing key removed successfully!');
-        fetchData();
-      } else {
-        showToast(data.error || 'Failed to remove key', 'error');
-      }
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
-  };
-
-  const handleDeleteWebhook = async (id: number, url: string) => {
-    const confirmed = window.confirm(`Remove webhook endpoint "${url}" (#${id})?`);
-    if (!confirmed) return;
+  const handleDeleteWebhook = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this webhook endpoint and its delivery logs?')) return;
     try {
       const res = await fetch(`/api/v1/webhooks/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) {
-        showToast('Webhook removed successfully!');
+        showToast('Webhook endpoint deleted successfully!');
         fetchData();
       } else {
-        showToast(data.error || 'Failed to remove webhook', 'error');
+        showToast(data.error || 'Failed to delete webhook', 'error');
       }
     } catch (err: any) {
       showToast(err.message, 'error');
     }
   };
 
-  return (
-    <div className="app-container">
-      {/* Toast Notification */}
-      {actionMessage && (
-        <div
-          style={{
-            position: 'fixed',
-            top: '20px',
-            right: '20px',
-            padding: '0.85rem 1.4rem',
-            background: actionMessage.type === 'success' ? '#10b981' : '#ef4444',
-            color: '#fff',
-            borderRadius: '8px',
-            fontWeight: 600,
-            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            animation: 'fadeIn 0.2s ease',
-          }}
-        >
-          {actionMessage.type === 'success' ? <Check size={18} /> : <Activity size={18} />}
-          {actionMessage.text}
-        </div>
-      )}
+  const handleSimulatePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/v1/simulator/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount_zec: simParams.amount_zec,
+          memo: simParams.memo,
+          pool: simParams.pool,
+          transfer_type: simParams.transfer_type
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(`Simulated ${simParams.amount_zec} ZEC (${simParams.pool}) note & dispatched webhook!`);
+        fetchData();
+      } else {
+        showToast(data.error || 'Failed to simulate payment', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
 
-      {/* Header */}
-      <header className="header">
-        <div className="brand">
-          <div className="brand-icon">
-            <Shield size={26} strokeWidth={2.5} />
+  const handlePurgeAllData = async () => {
+    if (!window.confirm('⚠️ WARNING: This will purge all viewing keys, notes, webhooks, and delivery logs. Continue?')) return;
+    try {
+      const res = await fetch('/api/v1/debug/purge', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Database purged and auto-increment IDs reset to 1!');
+        fetchData();
+      } else {
+        showToast(data.error || 'Failed to purge database', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  // Filtered transactions
+  const filteredTransactions = transactions.filter((tx) => {
+    const matchesSearch =
+      tx.txid.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      tx.memo_text.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      tx.block_height.toString().includes(searchTerm);
+    const matchesPool = poolFilter === 'ALL' || tx.pool === poolFilter;
+    return matchesSearch && matchesPool;
+  });
+
+  // Calculate analytics
+  const ironwoodCount = transactions.filter((t) => t.pool === 'Ironwood').length;
+  const saplingCount = transactions.filter((t) => t.pool === 'Sapling').length;
+  const orchardCount = transactions.filter((t) => t.pool === 'Orchard').length;
+  const totalNotes = transactions.length || 1;
+  const ironwoodPct = Math.round((ironwoodCount / totalNotes) * 100);
+  const saplingPct = Math.round((saplingCount / totalNotes) * 100);
+  const orchardPct = Math.round((orchardCount / totalNotes) * 100);
+
+  const successfulDeliveries = deliveries.filter((d) => d.status_code >= 200 && d.status_code < 300).length;
+  const deliveryRate = deliveries.length ? Math.round((successfulDeliveries / deliveries.length) * 100) : 100;
+
+  return (
+    <div className="app-wrapper">
+      {/* ====================================================================
+          LEFT SIDEBAR (Template 1 Inspired)
+          ==================================================================== */}
+      <aside className="app-sidebar">
+        {/* Brand */}
+        <div className="brand-header">
+          <div className="brand-icon-wrapper">
+            <Shield size={24} color="#ffffff" />
           </div>
           <div>
-            <div className="brand-title">ZECSHIELD GATEWAY</div>
-            <div className="brand-subtitle">Shielded Zcash Indexer & Webhook Engine</div>
+            <div className="brand-text-title">
+              ZecShield
+              <span className="brand-badge">Testnet</span>
+            </div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Shielded Webhook Gateway</div>
           </div>
         </div>
 
-        <div className="header-status">
-          <div className="status-badge">
-            <div className="live-indicator"></div>
-            <span>{status?.network.toUpperCase() || 'TESTNET'}</span>
-          </div>
-
-          <div className="tip-badge">
-            <Server size={14} />
-            <span>Block #{status?.chain_tip || '4518562'}</span>
-          </div>
-
+        {/* Navigation Menu */}
+        <div className="nav-section-label">Main Menu</div>
+        <nav className="nav-menu">
           <button
-            id="refresh-btn"
-            className="btn btn-secondary btn-sm"
-            onClick={fetchData}
-            title="Refresh chain state"
+            className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('overview')}
           >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            <span>Sync</span>
+            <div className="nav-item-left">
+              <Activity size={18} />
+              <span>Dashboard</span>
+            </div>
+            {transactions.length > 0 && <span className="nav-badge">{transactions.length}</span>}
           </button>
 
           <button
-            id="reset-db-btn"
-            className="btn btn-secondary btn-sm"
-            onClick={() => handleResetData(false)}
-            title="Wipe database and reset to clean state"
-            style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+            className={`nav-item ${activeTab === 'keys' ? 'active' : ''}`}
+            onClick={() => setActiveTab('keys')}
           >
-            <RotateCcw size={14} />
-            <span>Reset Data</span>
-          </button>
-
-          <button
-            id="quick-simulate-btn"
-            className="btn btn-primary btn-sm"
-            onClick={handleSimulatePayment}
-          >
-            <Zap size={14} />
-            <span>Simulate Note</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Navigation Tabs */}
-      <nav className="tabs-nav">
-        <button
-          id="tab-overview"
-          className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-          onClick={() => setActiveTab('overview')}
-        >
-          <Activity size={17} />
-          <span>Overview & Live Feed</span>
-        </button>
-
-        <button
-          id="tab-keys"
-          className={`tab-btn ${activeTab === 'keys' ? 'active' : ''}`}
-          onClick={() => setActiveTab('keys')}
-        >
-          <Key size={17} />
-          <span>Viewing Keys ({keys.length})</span>
-        </button>
-
-        <button
-          id="tab-webhooks"
-          className={`tab-btn ${activeTab === 'webhooks' ? 'active' : ''}`}
-          onClick={() => setActiveTab('webhooks')}
-        >
-          <Webhook size={17} />
-          <span>Webhooks & Deliveries ({webhooks.length})</span>
-        </button>
-
-        <button
-          id="tab-simulator"
-          className={`tab-btn ${activeTab === 'simulator' ? 'active' : ''}`}
-          onClick={() => setActiveTab('simulator')}
-        >
-          <Play size={17} />
-          <span>Pitch Simulator</span>
-        </button>
-
-        <button
-          id="tab-docs"
-          className={`tab-btn ${activeTab === 'docs' ? 'active' : ''}`}
-          onClick={() => setActiveTab('docs')}
-        >
-          <FileCode size={17} />
-          <span>API Docs & Snippets</span>
-        </button>
-      </nav>
-
-      {/* Metric Cards */}
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <div className="metric-header">
-            <span>MONITORED KEYS</span>
-            <div className="metric-icon-box" style={{ color: 'var(--zec-gold)' }}>
+            <div className="nav-item-left">
               <Key size={18} />
+              <span>Viewing Keys</span>
+            </div>
+            <span className="nav-badge">{keys.length}</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'webhooks' ? 'active' : ''}`}
+            onClick={() => setActiveTab('webhooks')}
+          >
+            <div className="nav-item-left">
+              <Webhook size={18} />
+              <span>Webhooks</span>
+            </div>
+            <span className="nav-badge">{webhooks.length}</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
+            onClick={() => setActiveTab('simulator')}
+          >
+            <div className="nav-item-left">
+              <Play size={18} />
+              <span>Simulate Note</span>
+            </div>
+            <span className="nav-badge" style={{ color: 'var(--orange-primary)' }}>Test</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'docs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('docs')}
+          >
+            <div className="nav-item-left">
+              <FileCode size={18} />
+              <span>API Reference</span>
+            </div>
+          </button>
+        </nav>
+
+        {/* Network & Debug Section */}
+        <div className="nav-section-label">Chain & Utilities</div>
+        <nav className="nav-menu">
+          <div className="nav-item" style={{ cursor: 'default' }}>
+            <div className="nav-item-left">
+              <Radio size={16} color="var(--orange-primary)" />
+              <span style={{ fontSize: '0.82rem' }}>Block Tip #{status?.chain_tip || 4529180}</span>
             </div>
           </div>
-          <div className="metric-value">{status?.stats.total_keys_monitored || keys.length}</div>
-          <div className="metric-sub">Active UFVKs running trial-decryption</div>
-        </div>
 
-        <div className="metric-card">
-          <div className="metric-header">
-            <span>SHIELDED NOTES DETECTED</span>
-            <div className="metric-icon-box" style={{ color: 'var(--zec-green)' }}>
-              <Shield size={18} />
+          <button
+            className="nav-item"
+            style={{ color: '#be123c' }}
+            onClick={handlePurgeAllData}
+            title="Clean database and reset sequence IDs"
+          >
+            <div className="nav-item-left">
+              <RotateCcw size={16} />
+              <span style={{ fontSize: '0.82rem' }}>Purge & Reset</span>
+            </div>
+          </button>
+        </nav>
+
+        {/* NU6.3 Protocol Ready Pill */}
+        <div className="sidebar-protocol-container">
+          <div className="sidebar-protocol-pill" title="NU6.3 Protocol Ready (Ironwood v6 Support)">
+            <span className="protocol-pulse-dot" />
+            <Sparkles size={13} />
+            <span>NU6.3 Protocol Ready</span>
+          </div>
+        </div>
+      </aside>
+
+      {/* ====================================================================
+          MAIN CONTENT AREA
+          ==================================================================== */}
+      <main className="app-main">
+        {/* Top Header Bar */}
+        <header className="top-header">
+          {/* Search Box */}
+          <div className="search-box-wrapper">
+            <Search className="search-icon-left" size={17} />
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search by TxID, Memo text, or Block..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <span className="search-shortcut-badge">⌘K</span>
+          </div>
+
+          {/* Right Header Info */}
+          <div className="top-header-right">
+            <button
+              className="header-icon-btn"
+              onClick={fetchData}
+              title="Refresh live data from server"
+            >
+              <RefreshCw size={17} className={isRefreshing ? 'spin-animation' : ''} />
+            </button>
+
+            {/* User Profile / Active Monitored Wallet */}
+            <div className="user-profile-badge">
+              <div className="user-avatar-circle">ZW</div>
+              <div className="user-info-text">
+                <span className="user-name-title">
+                  {keys.length > 0 ? keys[0].label || 'Main Testnet Wallet' : 'No Keys Active'}
+                </span>
+                <span className="user-wallet-address">
+                  {keys.length > 0 ? `${keys[0].key_string.slice(0, 10)}...${keys[0].key_string.slice(-6)}` : 'Register UFVK below'}
+                </span>
+              </div>
             </div>
           </div>
-          <div className="metric-value">{status?.stats.total_notes_indexed || transactions.length}</div>
-          <div className="metric-sub">Decrypted payments confirmed on-chain</div>
-        </div>
+        </header>
 
-        <div className="metric-card">
-          <div className="metric-header">
-            <span>TOTAL SHIELDED VOLUME</span>
-            <div className="metric-icon-box" style={{ color: 'var(--orchard-purple)' }}>
-              <Layers size={18} />
-            </div>
-          </div>
-          <div className="metric-value" style={{ color: 'var(--zec-gold)' }}>
-            {status?.stats.total_shielded_zec || '0.0000'} <span style={{ fontSize: '1rem', color: '#fff' }}>ZEC</span>
-          </div>
-          <div className="metric-sub">Confidential shielded value indexed</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-header">
-            <span>ACTIVE WEBHOOKS</span>
-            <div className="metric-icon-box" style={{ color: 'var(--cyan-accent)' }}>
-              <Radio size={18} />
-            </div>
-          </div>
-          <div className="metric-value">{webhooks.length}</div>
-          <div className="metric-sub">{deliveries.length} total event deliveries dispatched</div>
-        </div>
-      </div>
-
-      {/* TAB 1: OVERVIEW & LIVE FEED */}
-      {activeTab === 'overview' && (
-        <div className="animate-fade-in">
-          <div className="panel">
-            <div className="panel-header">
-              <div>
-                <div className="panel-title">
-                  <Shield size={20} color="var(--zec-green)" />
-                  <span>Real-Time Shielded Note Stream</span>
-                </div>
-                <div className="panel-desc">
-                  Incoming Zcash transactions decrypted in the background via Viewing Keys with 512-byte memos.
+        {/* ==================================================================
+            TAB 1: OVERVIEW / LIVE DASHBOARD
+            ================================================================== */}
+        {activeTab === 'overview' && (
+          <>
+            {/* Page Title & Action Bar */}
+            <div className="page-title-row">
+              <div className="page-title-left">
+                <h1>Dashboard</h1>
+                <div className="page-subtitle-desc">
+                  Real-time zero-knowledge transaction indexing, trial decryption, and webhook engine.
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <span className="badge badge-ironwood">NU6.3 (Ironwood)</span>
-                <span className="badge badge-orchard">Halo 2 (Orchard)</span>
-                <span className="badge badge-sapling">Groth16 (Sapling)</span>
-              </div>
-            </div>
-
-            {transactions.length === 0 ? (
-              <div className="empty-state">
-                <Shield size={48} className="empty-icon" />
-                <p style={{ fontWeight: 600, fontSize: '1.1rem', marginBottom: '0.5rem' }}>No Shielded Notes Detected Yet</p>
-                <p style={{ fontSize: '0.85rem' }}>
-                  Register a viewing key or click <strong>"Simulate Note"</strong> to inject a live demo transaction.
-                </p>
+              <div className="page-title-actions">
                 <button
-                  className="btn btn-primary"
-                  style={{ marginTop: '1.25rem' }}
-                  onClick={handleSimulatePayment}
+                  className="btn btn-secondary"
+                  onClick={() => setActiveTab('webhooks')}
                 >
-                  <Zap size={16} />
-                  <span>Generate Demo Note</span>
-                </button>
-              </div>
-            ) : (
-              <div className="table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>TxID</th>
-                      <th>Block</th>
-                      <th>Pool</th>
-                      <th>Amount</th>
-                      <th>Decrypted Memo</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {transactions.map((tx) => (
-                      <tr key={tx.id}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                              {tx.txid.slice(0, 10)}...{tx.txid.slice(-8)}
-                            </span>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              style={{ padding: '0.2rem 0.4rem' }}
-                              onClick={() => copyToClipboard(tx.txid, 'TxID')}
-                              title="Copy TxID"
-                            >
-                              <Copy size={12} />
-                            </button>
-                          </div>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
-                            #{tx.block_height}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                            <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
-                              {tx.pool}
-                            </span>
-                            <span className={`badge ${tx.transfer_type === 'outgoing' ? 'badge-outgoing' : tx.transfer_type === 'internal' ? 'badge-internal' : 'badge-incoming'}`} style={{ fontSize: '0.65rem' }}>
-                              {tx.transfer_type === 'outgoing' ? 'Outward' : tx.transfer_type === 'internal' ? 'Change' : 'Inward'}
-                            </span>
-                            {tx.is_simulated ? (
-                              <span className="badge badge-simulated" style={{ fontSize: '0.65rem' }}>
-                                Simulated
-                              </span>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td>
-                          <div style={{ 
-                            fontWeight: 700, 
-                            fontSize: '0.95rem', 
-                            color: tx.transfer_type === 'outgoing' ? '#fb7185' : tx.transfer_type === 'internal' ? 'var(--text-muted)' : 'var(--zec-green)' 
-                          }}>
-                            {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zec.toFixed(4)} ZEC
-                          </div>
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                            {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zat.toLocaleString()} zat
-                          </div>
-                        </td>
-                        <td>
-                          <div className="memo-tag" title={tx.memo_text}>
-                            <Lock size={12} color="var(--zec-gold)" />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '380px' }}>
-                              {tx.memo_text || '<Empty memo>'}
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => copyToClipboard(tx.memo_text, 'Memo')}
-                            title="Copy Decrypted Memo"
-                          >
-                            <Copy size={12} />
-                            <span>Copy Memo</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: VIEWING KEYS MANAGER */}
-      {activeTab === 'keys' && (
-        <div className="animate-fade-in">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
-            {/* Registration Form */}
-            <div className="panel">
-              <div className="panel-title" style={{ marginBottom: '1rem' }}>
-                <Key size={20} color="var(--zec-gold)" />
-                <span>Register Viewing Key</span>
-              </div>
-              <p className="panel-desc" style={{ marginBottom: '1.25rem' }}>
-                Add an <strong>Incoming Viewing Key</strong> or <strong>Unified Full Viewing Key (UFVK)</strong>. No spending authority is granted.
-              </p>
-
-              <form onSubmit={handleRegisterKey}>
-                <div className="form-group">
-                  <label className="form-label">Key Label / Merchant Name</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g., E-commerce Checkout Store"
-                    value={newKey.label}
-                    onChange={(e) => setNewKey({ ...newKey, label: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Viewing Key String (uview...)</label>
-                  <textarea
-                    className="form-textarea"
-                    placeholder="uviewtest1qqqq... or uview1..."
-                    required
-                    value={newKey.key}
-                    onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Birthday Height (Scan start)</label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={newKey.birth_height}
-                    onChange={(e) => setNewKey({ ...newKey, birth_height: e.target.value })}
-                  />
-                  <small style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-                    Block height when address was created (skips past history).
-                  </small>
-                </div>
-
-                <button id="submit-key-btn" type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                  <Key size={16} />
-                  <span>Register & Begin Syncing</span>
-                </button>
-              </form>
-            </div>
-
-            {/* Keys Table */}
-            <div className="panel">
-              <div className="panel-title" style={{ marginBottom: '1rem' }}>
-                <Activity size={20} color="var(--zec-green)" />
-                <span>Active Monitored Keys</span>
-              </div>
-
-              <div className="table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Label & Type</th>
-                      <th>Key Preview</th>
-                      <th>Birthday</th>
-                      <th>Scanned Height</th>
-                      <th>Sync Status</th>
-                      <th style={{ textAlign: 'right' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {keys.map((k) => (
-                      <tr key={k.id}>
-                        <td>
-                          <div style={{ fontWeight: 700 }}>{k.label}</div>
-                          <span className="badge badge-orchard" style={{ fontSize: '0.65rem' }}>
-                            {k.key_type}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            {k.key_string.slice(0, 16)}...{k.key_string.slice(-10)}
-                          </div>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
-                            #{k.birth_height}
-                          </span>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--zec-gold)' }}>
-                            #{k.last_scanned_height}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <div
-                              style={{
-                                width: '60px',
-                                height: '6px',
-                                background: 'rgba(255,255,255,0.1)',
-                                borderRadius: '4px',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: `${k.sync_percent}%`,
-                                  height: '100%',
-                                  background: 'var(--zec-green)',
-                                }}
-                              ></div>
-                            </div>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{k.sync_percent}%</span>
-                          </div>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <button
-                            className="btn btn-secondary"
-                            style={{
-                              padding: '0.3rem 0.65rem',
-                              fontSize: '0.75rem',
-                              color: '#ff6b6b',
-                              borderColor: 'rgba(255, 107, 107, 0.3)',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.35rem',
-                              cursor: 'pointer',
-                            }}
-                            onClick={() => handleDeleteKey(k.id, k.label)}
-                            title="Remove viewing key"
-                          >
-                            <Trash2 size={13} /> Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: WEBHOOKS & DELIVERIES */}
-      {activeTab === 'webhooks' && (
-        <div className="animate-fade-in">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
-            {/* Webhook Form */}
-            <div className="panel">
-              <div className="panel-title" style={{ marginBottom: '1rem' }}>
-                <Webhook size={20} color="var(--cyan-accent)" />
-                <span>Add Webhook Endpoint</span>
-              </div>
-              <p className="panel-desc" style={{ marginBottom: '1.25rem' }}>
-                Receive instant cryptographically signed HTTP POST payloads whenever a shielded note matches.
-              </p>
-
-              <form onSubmit={handleRegisterWebhook}>
-                <div className="form-group">
-                  <label className="form-label">Endpoint URL</label>
-                  <input
-                    type="url"
-                    className="form-input"
-                    placeholder="https://api.yourstore.com/webhooks/zcash"
-                    required
-                    value={newWebhook.target_url}
-                    onChange={(e) => setNewWebhook({ ...newWebhook, target_url: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Description</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Payment Notification Dispatcher"
-                    value={newWebhook.description}
-                    onChange={(e) => setNewWebhook({ ...newWebhook, description: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">HMAC Secret (Optional)</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Leave empty to auto-generate secret"
-                    value={newWebhook.secret}
-                    onChange={(e) => setNewWebhook({ ...newWebhook, secret: e.target.value })}
-                  />
-                  <small style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-                    Used to sign <code>X-ZecShield-Signature</code> header.
-                  </small>
-                </div>
-
-                <button id="submit-webhook-btn" type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                  <Webhook size={16} />
+                  <Plus size={16} />
                   <span>Register Webhook</span>
                 </button>
-              </form>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => setActiveTab('simulator')}
+                >
+                  <Zap size={16} />
+                  <span>Simulate Payment</span>
+                </button>
+              </div>
             </div>
 
-            {/* Deliveries & Active Webhooks */}
-            <div>
-              <div className="panel" style={{ marginBottom: '1.5rem' }}>
-                <div className="panel-title" style={{ marginBottom: '1rem' }}>
-                  <Radio size={20} color="var(--cyan-accent)" />
-                  <span>Configured Webhook Endpoints</span>
+            {/* 4 Stat Cards Grid (Template 1 Inspired) */}
+            <div className="stat-cards-grid">
+              {/* Card 1: Featured Burnt Orange Card */}
+              <div className="stat-card-featured">
+                <div className="stat-header">
+                  <span className="stat-label">Total Shielded Value</span>
+                  <div className="stat-arrow-btn">
+                    <ArrowUpRight size={18} />
+                  </div>
+                </div>
+                <div className="stat-value">
+                  {status ? `${status.stats.total_shielded_zec} ZEC` : '1.1623 ZEC'}
+                </div>
+                <div className="stat-footer">
+                  <span className="trend-badge" style={{ background: 'rgba(255,255,255,0.2)', color: '#ffffff' }}>
+                    100% Synced
+                  </span>
+                  <span>{status?.stats.total_shielded_zat.toLocaleString() || '116,230,000'} zat</span>
+                </div>
+              </div>
+
+              {/* Card 2: Indexed Transactions */}
+              <div className="stat-card-white">
+                <div className="stat-header">
+                  <span className="stat-label">Indexed Notes</span>
+                  <div className="stat-arrow-btn">
+                    <ArrowUpRight size={18} />
+                  </div>
+                </div>
+                <div className="stat-value">{transactions.length}</div>
+                <div className="stat-footer">
+                  <span className="trend-badge positive">All Pools</span>
+                  <span>Ironwood, Orchard & Sapling</span>
+                </div>
+              </div>
+
+              {/* Card 3: Monitored Keys */}
+              <div className="stat-card-white">
+                <div className="stat-header">
+                  <span className="stat-label">Monitored Keys</span>
+                  <div className="stat-arrow-btn">
+                    <ArrowUpRight size={18} />
+                  </div>
+                </div>
+                <div className="stat-value">{keys.length}</div>
+                <div className="stat-footer">
+                  <span className="trend-badge orange">Continuous</span>
+                  <span>Tip #{status?.chain_tip || 4529180}</span>
+                </div>
+              </div>
+
+              {/* Card 4: Webhook Deliveries */}
+              <div className="stat-card-white">
+                <div className="stat-header">
+                  <span className="stat-label">Webhook Deliveries</span>
+                  <div className="stat-arrow-btn">
+                    <ArrowUpRight size={18} />
+                  </div>
+                </div>
+                <div className="stat-value">{deliveries.length}</div>
+                <div className="stat-footer">
+                  <span className="trend-badge positive">{deliveryRate}% HTTP 200</span>
+                  <span>{webhooks.length} Active Endpoints</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Analytics & Syncer Status Grid */}
+            <div className="analytics-grid">
+              {/* Pool Distribution Card */}
+              <div className="dashboard-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Shielded Pool Analytics</div>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{transactions.length} total notes</span>
                 </div>
 
-                {webhooks.length === 0 ? (
-                  <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>No webhooks registered.</p>
-                ) : (
+                <div className="pool-bars-container">
+                  <div className="pool-bar-item">
+                    <div className="pool-bar-header">
+                      <span style={{ color: 'var(--pool-ironwood)' }}>Ironwood (ZIP 2005 / NU6.3)</span>
+                      <span>{ironwoodCount} notes ({ironwoodPct}%)</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill ironwood" style={{ width: `${ironwoodPct}%` }} />
+                    </div>
+                  </div>
+
+                  <div className="pool-bar-item">
+                    <div className="pool-bar-header">
+                      <span style={{ color: 'var(--pool-sapling)' }}>Sapling (Groth16)</span>
+                      <span>{saplingCount} notes ({saplingPct}%)</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill sapling" style={{ width: `${saplingPct}%` }} />
+                    </div>
+                  </div>
+
+                  <div className="pool-bar-item">
+                    <div className="pool-bar-header">
+                      <span style={{ color: 'var(--pool-orchard)' }}>Orchard (Halo 2)</span>
+                      <span>{orchardCount} notes ({orchardPct}%)</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill orchard" style={{ width: `${orchardPct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Center Widget: Syncer Status */}
+              <div className="syncer-status-widget">
+                <div>
+                  <div className="syncer-live-badge">
+                    <div className="syncer-pulse-dot" />
+                    <span>Scanner Connected</span>
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    Zcash Testnet Scanner
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                    Upstream: {status?.lightwalletd_url || 'https://testnet.zec.rocks:443'}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '1.25rem' }}>
+                  <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginBottom: '0.2rem' }}>
+                    Chain Tip Synchronized
+                  </div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--orange-bright)' }}>
+                    #{status?.chain_tip || 4529180}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Widget: Quick Actions */}
+              <div className="dashboard-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Quick Actions</div>
+                  <span className="card-action-link" onClick={() => setActiveTab('docs')}>Docs</span>
+                </div>
+
+                <div className="quick-action-list">
+                  <div className="quick-action-item" onClick={() => setActiveTab('keys')}>
+                    <div className="quick-action-left">
+                      <div className="quick-action-icon">
+                        <Key size={18} />
+                      </div>
+                      <div>
+                        <div className="quick-action-title">Manage Viewing Keys</div>
+                        <div className="quick-action-desc">Add or remove UFVKs</div>
+                      </div>
+                    </div>
+                    <ChevronRight size={16} color="var(--text-light)" />
+                  </div>
+
+                  <div className="quick-action-item" onClick={() => setActiveTab('webhooks')}>
+                    <div className="quick-action-left">
+                      <div className="quick-action-icon">
+                        <Webhook size={18} />
+                      </div>
+                      <div>
+                        <div className="quick-action-title">Configure Webhooks</div>
+                        <div className="quick-action-desc">Add destination endpoints</div>
+                      </div>
+                    </div>
+                    <ChevronRight size={16} color="var(--text-light)" />
+                  </div>
+
+                  <div className="quick-action-item" onClick={() => setActiveTab('simulator')}>
+                    <div className="quick-action-left">
+                      <div className="quick-action-icon">
+                        <Play size={18} />
+                      </div>
+                      <div>
+                        <div className="quick-action-title">Simulate Payment</div>
+                        <div className="quick-action-desc">Inject test note & webhook</div>
+                      </div>
+                    </div>
+                    <ChevronRight size={16} color="var(--text-light)" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Shielded Transactions Live Feed Table Card */}
+            <div className="table-card">
+              <div className="table-header-bar">
+                <div className="table-title-group">
+                  <h2>Shielded Transactions Live Feed</h2>
+                  <p>Transactions trial-decrypted on-chain in the background with 512-byte memos</p>
+                </div>
+
+                {/* Pool Filter Pills */}
+                <div className="filter-pills-row">
+                  {(['ALL', 'Ironwood', 'Orchard', 'Sapling'] as const).map((p) => (
+                    <button
+                      key={p}
+                      className={`filter-pill ${poolFilter === p ? 'active' : ''}`}
+                      onClick={() => setPoolFilter(p)}
+                    >
+                      {p === 'ALL' ? 'All Pools' : p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredTransactions.length === 0 ? (
+                <div className="empty-state-box">
+                  <div className="empty-icon-wrap">
+                    <Shield size={32} />
+                  </div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '0.4rem' }}>
+                    No Transactions Found
+                  </h3>
+                  <p style={{ fontSize: '0.85rem', maxWidth: '400px', margin: '0 auto 1.25rem' }}>
+                    {searchTerm ? `No transactions matched "${searchTerm}"` : 'Register a viewing key or click "Simulate Payment" to create a demo note.'}
+                  </p>
+                  <button className="btn btn-primary" onClick={() => setActiveTab('simulator')}>
+                    Simulate Demo Note
+                  </button>
+                </div>
+              ) : (
+                <div className="data-table-wrapper">
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>URL</th>
-                        <th>Secret</th>
-                        <th>Status</th>
-                        <th style={{ textAlign: 'right' }}>Action</th>
+                        <th>TxID</th>
+                        <th>Block</th>
+                        <th>Pool & Type</th>
+                        <th>Amount</th>
+                        <th>Decrypted Memo</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {webhooks.map((w) => (
-                        <tr key={w.id}>
-                          <td>
-                            <div style={{ fontWeight: 600 }}>{w.target_url}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{w.description}</div>
-                          </td>
+                      {filteredTransactions.map((tx) => (
+                        <tr key={tx.id}>
+                          {/* TxID */}
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                {w.secret.slice(0, 8)}...
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 500, color: 'var(--text-main)' }}>
+                                {tx.txid.slice(0, 10)}...{tx.txid.slice(-8)}
                               </span>
                               <button
-                                className="btn btn-secondary btn-sm"
-                                style={{ padding: '0.15rem 0.35rem' }}
-                                onClick={() => copyToClipboard(w.secret, 'Webhook Secret')}
+                                className="btn btn-secondary btn-icon-only btn-sm"
+                                onClick={() => copyToClipboard(tx.txid, 'TxID')}
+                                title="Copy TxID"
                               >
-                                <Copy size={11} />
+                                <Copy size={13} />
                               </button>
                             </div>
                           </td>
+
+                          {/* Block Height */}
                           <td>
-                            <span className="badge badge-sapling">Active</span>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                              #{tx.block_height}
+                            </span>
                           </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <button
-                              className="btn btn-secondary"
+
+                          {/* Pool & Direction Badges */}
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
+                                {tx.pool}
+                              </span>
+                              <span className={`badge ${tx.transfer_type === 'outgoing' ? 'badge-outgoing' : tx.transfer_type === 'internal' ? 'badge-internal' : 'badge-incoming'}`}>
+                                {tx.transfer_type === 'outgoing' ? 'Outward' : tx.transfer_type === 'internal' ? 'Change' : 'Inward'}
+                              </span>
+                              {tx.is_simulated ? (
+                                <span className="badge badge-simulated">Simulated</span>
+                              ) : null}
+                            </div>
+                          </td>
+
+                          {/* Amount with proper +/- prefix, burnt orange / green / red color, and Playfair Display font */}
+                          <td>
+                            <div
+                              className="amount-zec-val"
                               style={{
-                                padding: '0.3rem 0.65rem',
-                                fontSize: '0.75rem',
-                                color: '#ff6b6b',
-                                borderColor: 'rgba(255, 107, 107, 0.3)',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.35rem',
-                                cursor: 'pointer',
+                                color: tx.transfer_type === 'outgoing' ? 'var(--status-outward)' : tx.transfer_type === 'internal' ? 'var(--text-muted)' : 'var(--status-inward)'
                               }}
-                              onClick={() => handleDeleteWebhook(w.id, w.target_url)}
-                              title="Remove webhook"
                             >
-                              <Trash2 size={13} /> Remove
+                              {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zec.toFixed(4)} ZEC
+                            </div>
+                            <div className="amount-zat-val">
+                              {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zat.toLocaleString()} zat
+                            </div>
+                          </td>
+
+                          {/* Decrypted Memo */}
+                          <td>
+                            <div className="memo-pill-tag" title={tx.memo_text || '<Empty memo>'}>
+                              <Lock size={12} color="var(--orange-primary)" />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
+                                {tx.memo_text || '<Empty memo>'}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Copy Memo */}
+                          <td>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => copyToClipboard(tx.memo_text, 'Memo')}
+                              title="Copy Decrypted Memo"
+                            >
+                              <Copy size={13} />
+                              <span>Copy Memo</span>
                             </button>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                )}
-              </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
-              {/* Delivery Logs */}
-              <div className="panel">
-                <div className="panel-title" style={{ marginBottom: '1rem' }}>
-                  <Clock size={20} color="var(--zec-gold)" />
-                  <span>Live Delivery Logs</span>
+        {/* ==================================================================
+            TAB 2: VIEWING KEYS MANAGEMENT
+            ================================================================== */}
+        {activeTab === 'keys' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="page-title-row">
+              <div className="page-title-left">
+                <h1>Viewing Keys</h1>
+                <div className="page-subtitle-desc">
+                  Register Incoming (IVK) or Unified Full Viewing Keys (UFVK) for non-custodial transaction trial decryption.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem' }}>
+              {/* Register Form */}
+              <div className="dashboard-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Register New Key</div>
                 </div>
 
-                {deliveries.length === 0 ? (
-                  <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>No deliveries logged yet.</p>
+                <form onSubmit={handleRegisterKey}>
+                  <div className="form-group">
+                    <label className="form-label">Key Label / Account Name</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g., Merchant Checkout Wallet"
+                      value={newKey.label}
+                      onChange={(e) => setNewKey({ ...newKey, label: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Key Type</label>
+                    <select
+                      className="form-select"
+                      value={newKey.key_type}
+                      onChange={(e) => setNewKey({ ...newKey, key_type: e.target.value })}
+                    >
+                      <option value="UFVK">UFVK — Unified Full Viewing Key (Recommended)</option>
+                      <option value="Orchard_FVK">Orchard FVK / IVK</option>
+                      <option value="Sapling_IVK">Sapling Extended IVK (zxviews...)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Key String</label>
+                    <textarea
+                      className="form-textarea"
+                      placeholder="uviewtest1... or zxviews..."
+                      value={newKey.key}
+                      onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Birth Height (Block checkpoint)</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      value={newKey.birth_height}
+                      onChange={(e) => setNewKey({ ...newKey, birth_height: e.target.value })}
+                    />
+                  </div>
+
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                    <Plus size={16} />
+                    <span>Register Key & Start Sync</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Active Keys Table */}
+              <div className="table-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Active Monitored Keys ({keys.length})</div>
+                </div>
+
+                {keys.length === 0 ? (
+                  <div className="empty-state-box">
+                    <Key size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
+                    <p>No viewing keys registered yet. Add your first UFVK above!</p>
+                  </div>
                 ) : (
+                  <div className="data-table-wrapper">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Label & Type</th>
+                          <th>Key String</th>
+                          <th>Birth</th>
+                          <th>Last Scanned</th>
+                          <th>Status</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {keys.map((k) => (
+                          <tr key={k.id}>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{k.label || 'Unlabeled'}</div>
+                              <span className="badge badge-orchard" style={{ fontSize: '0.68rem' }}>
+                                {k.key_type}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                  {k.key_string.slice(0, 14)}...{k.key_string.slice(-8)}
+                                </span>
+                                <button
+                                  className="btn btn-secondary btn-icon-only btn-sm"
+                                  onClick={() => copyToClipboard(k.key_string, 'Viewing Key')}
+                                  title="Copy Key String"
+                                >
+                                  <Copy size={12} />
+                                </button>
+                              </div>
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>#{k.birth_height}</td>
+                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, color: 'var(--orange-primary)' }}>
+                              #{k.last_scanned_height}
+                            </td>
+                            <td>
+                              <span className="badge badge-active">Active</span>
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                style={{ color: '#be123c', borderColor: '#fecdd3' }}
+                                onClick={() => handleDeleteKey(k.id)}
+                                title="Remove key"
+                              >
+                                <Trash2 size={13} />
+                                <span>Delete</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================================================================
+            TAB 3: WEBHOOKS & DELIVERIES
+            ================================================================== */}
+        {activeTab === 'webhooks' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="page-title-row">
+              <div className="page-title-left">
+                <h1>Webhooks & Deliveries</h1>
+                <div className="page-subtitle-desc">
+                  Configure HMAC-SHA256 signed event listeners for on-chain shielded note discoveries.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem' }}>
+              {/* Add Webhook Form */}
+              <div className="dashboard-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Register Webhook Endpoint</div>
+                </div>
+
+                <form onSubmit={handleRegisterWebhook}>
+                  <div className="form-group">
+                    <label className="form-label">Target Destination URL</label>
+                    <input
+                      type="url"
+                      className="form-input"
+                      placeholder="https://api.yourdomain.com/webhooks/zcash"
+                      value={newWebhook.target_url}
+                      onChange={(e) => setNewWebhook({ ...newWebhook, target_url: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Description / Identifier</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g., Main Production Payment Listener"
+                      value={newWebhook.description}
+                      onChange={(e) => setNewWebhook({ ...newWebhook, description: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">HMAC Signing Secret (Optional)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Auto-generated if left empty"
+                      value={newWebhook.secret}
+                      onChange={(e) => setNewWebhook({ ...newWebhook, secret: e.target.value })}
+                    />
+                  </div>
+
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                    <Plus size={16} />
+                    <span>Save Webhook Endpoint</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Endpoints Table */}
+              <div className="table-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Configured Endpoints ({webhooks.length})</div>
+                </div>
+
+                {webhooks.length === 0 ? (
+                  <div className="empty-state-box">
+                    <Webhook size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
+                    <p>No webhook endpoints registered yet. Configure your destination listener above!</p>
+                  </div>
+                ) : (
+                  <div className="data-table-wrapper">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Description</th>
+                          <th>Target URL</th>
+                          <th>Secret Key</th>
+                          <th>Status</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {webhooks.map((w) => (
+                          <tr key={w.id}>
+                            <td style={{ fontWeight: 600 }}>{w.description || 'Webhook #' + w.id}</td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                                  {w.target_url}
+                                </span>
+                                <button
+                                  className="btn btn-secondary btn-icon-only btn-sm"
+                                  onClick={() => copyToClipboard(w.target_url, 'Webhook URL')}
+                                  title="Copy URL"
+                                >
+                                  <Copy size={12} />
+                                </button>
+                              </div>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                  {w.secret.slice(0, 10)}...
+                                </span>
+                                <button
+                                  className="btn btn-secondary btn-icon-only btn-sm"
+                                  onClick={() => copyToClipboard(w.secret, 'Secret')}
+                                  title="Copy Secret"
+                                >
+                                  <Copy size={12} />
+                                </button>
+                              </div>
+                            </td>
+                            <td>
+                              <span className="badge badge-active">Active</span>
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                style={{ color: '#be123c', borderColor: '#fecdd3' }}
+                                onClick={() => handleDeleteWebhook(w.id)}
+                                title="Remove webhook"
+                              >
+                                <Trash2 size={13} />
+                                <span>Delete</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Delivery Logs */}
+            <div className="table-card">
+              <div className="card-header-row">
+                <div className="card-title-text">Recent Webhook Deliveries ({deliveries.length})</div>
+              </div>
+
+              {deliveries.length === 0 ? (
+                <div className="empty-state-box">
+                  <p>No delivery attempts recorded yet.</p>
+                </div>
+              ) : (
+                <div className="data-table-wrapper">
                   <table className="data-table">
                     <thead>
                       <tr>
+                        <th>ID</th>
                         <th>Note ID</th>
-                        <th>Status</th>
-                        <th>Response Body</th>
+                        <th>Status Code</th>
                         <th>Delivered At</th>
+                        <th>Payload Snippet</th>
+                        <th>Response Preview</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {deliveries.map((d) => (
+                      {deliveries.slice(0, 15).map((d) => (
                         <tr key={d.id}>
+                          <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>#{d.id}</td>
+                          <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>#{d.note_id}</td>
                           <td>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>#{d.note_id}</span>
+                            <span className={`badge ${d.status_code >= 200 && d.status_code < 300 ? 'badge-status-200' : 'badge-outgoing'}`}>
+                              {d.status_code === 0 ? 'FAIL' : `HTTP ${d.status_code}`}
+                            </span>
+                          </td>
+                          <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {new Date(d.delivered_at * 1000).toLocaleTimeString()}
                           </td>
                           <td>
-                            <span
-                              className="badge"
-                              style={{
-                                background: d.status_code === 200 ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-                                color: d.status_code === 200 ? '#10b981' : '#ef4444',
-                              }}
-                            >
-                              HTTP {d.status_code || 'ERR'}
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {d.payload.slice(0, 50)}...
                             </span>
                           </td>
                           <td>
-                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                              {d.response_body ? d.response_body.slice(0, 60) : '<empty>'}
-                            </div>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                              {new Date(d.delivered_at * 1000).toLocaleTimeString()}
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {d.response_body ? d.response_body.slice(0, 45) : 'OK'}
                             </span>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ==================================================================
+            TAB 4: TEST PAYMENT SIMULATOR
+            ================================================================== */}
+        {activeTab === 'simulator' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="page-title-row">
+              <div className="page-title-left">
+                <h1>Test Payment Simulator</h1>
+                <div className="page-subtitle-desc">
+                  Inject synthetic or testnet shielded notes to test webhook handlers and frontend reactivity end-to-end.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '1.5rem' }}>
+              <div className="dashboard-card">
+                <div className="card-header-row">
+                  <div className="card-title-text">Configure Simulated Note</div>
+                </div>
+
+                <form onSubmit={handleSimulatePayment}>
+                  <div className="form-group">
+                    <label className="form-label">Payment Amount (ZEC)</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      className="form-input"
+                      value={simParams.amount_zec}
+                      onChange={(e) => setSimParams({ ...simParams, amount_zec: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Shielded Value Pool</label>
+                    <select
+                      className="form-select"
+                      value={simParams.pool}
+                      onChange={(e) => setSimParams({ ...simParams, pool: e.target.value as any })}
+                    >
+                      <option value="Ironwood">Ironwood (ZIP 2005 / NU6.3 Lead Byte 0x03)</option>
+                      <option value="Orchard">Orchard (Halo 2 zk-SNARKs, Unified Address)</option>
+                      <option value="Sapling">Sapling (Groth16 zk-SNARKs)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Transfer Direction Type</label>
+                    <select
+                      className="form-select"
+                      value={simParams.transfer_type}
+                      onChange={(e) => setSimParams({ ...simParams, transfer_type: e.target.value as any })}
+                    >
+                      <option value="incoming">Inward / Incoming Payment (+)</option>
+                      <option value="outgoing">Outward / Withdrawal Transfer (-)</option>
+                      <option value="internal">Internal / Wallet Change (+)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">512-Byte Encrypted Memo Text</label>
+                    <textarea
+                      className="form-textarea"
+                      placeholder="Invoice #9012 - Real estate down payment..."
+                      value={simParams.memo}
+                      onChange={(e) => setSimParams({ ...simParams, memo: e.target.value })}
+                    />
+                  </div>
+
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                    <Zap size={16} />
+                    <span>Dispatch Simulated Payment & Trigger Webhooks</span>
+                  </button>
+                </form>
+              </div>
+
+              <div className="dashboard-card" style={{ background: 'var(--bg-card-subtle)' }}>
+                <div className="card-header-row">
+                  <div className="card-title-text">What Happens When You Click Simulate?</div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.88rem', color: 'var(--text-body)' }}>
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div className="badge badge-ironwood" style={{ height: 'fit-content' }}>1</div>
+                    <div>
+                      <strong>Generates Cryptographic Note:</strong> Creates a simulated shielded note with the chosen pool, amount, and 512-byte memo.
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div className="badge badge-ironwood" style={{ height: 'fit-content' }}>2</div>
+                    <div>
+                      <strong>Indexes into SQLite:</strong> Persists to the local database under your active viewing key.
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div className="badge badge-ironwood" style={{ height: 'fit-content' }}>3</div>
+                    <div>
+                      <strong>Dispatches HMAC-Signed Webhook:</strong> Fires HTTP POST requests with <code>X-ZecShield-Signature</code> to all active webhooks.
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div className="badge badge-ironwood" style={{ height: 'fit-content' }}>4</div>
+                    <div>
+                      <strong>Updates Live Feed:</strong> Automatically surfaces on the Dashboard table with correct direction signs.
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* TAB 4: PITCH SIMULATOR */}
-      {activeTab === 'simulator' && (
-        <div className="animate-fade-in">
-          <div className="simulator-box">
-            <div className="panel-title" style={{ marginBottom: '0.5rem', color: 'var(--zec-gold)' }}>
-              <Zap size={22} />
-              <span>Interactive Shielded Note Simulator (Pitch Presentation Tool)</span>
-            </div>
-            <p className="panel-desc" style={{ marginBottom: '1.5rem' }}>
-              Because waiting ~75 seconds for a real Zcash block to mine during a live pitch presentation is impractical,
-              this tool instantly generates a valid shielded note, records it in SQLite, and dispatches the signed HMAC webhook.
-            </p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.5rem' }}>
-              <div className="form-group">
-                <label className="form-label">Payment Amount (ZEC)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="form-input"
-                  value={simParams.amount_zec}
-                  onChange={(e) => setSimParams({ ...simParams, amount_zec: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Shielded Value Pool</label>
-                <select
-                  className="form-select"
-                  value={simParams.pool}
-                  onChange={(e) => setSimParams({ ...simParams, pool: e.target.value as 'Orchard' | 'Sapling' | 'Ironwood' })}
-                >
-                  <option value="Ironwood">Ironwood (ZIP 2005 / NU6.3 Lead Byte 0x03)</option>
-                  <option value="Orchard">Orchard (Halo 2 zk-SNARKs, Unified Address)</option>
-                  <option value="Sapling">Sapling (Groth16 zk-SNARKs)</option>
-                </select>
+        {/* ==================================================================
+            TAB 5: API DOCUMENTATION & SNIPPETS
+            ================================================================== */}
+        {activeTab === 'docs' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="page-title-row">
+              <div className="page-title-left">
+                <h1>Developer API Reference</h1>
+                <div className="page-subtitle-desc">
+                  Simple REST endpoints to register keys, query decrypted transactions, and configure event webhooks.
+                </div>
               </div>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Encrypted 512-byte Memo Text</label>
-              <textarea
-                className="form-textarea"
-                value={simParams.memo}
-                onChange={(e) => setSimParams({ ...simParams, memo: e.target.value })}
-                placeholder="Enter confidential order reference, invoice number, or encrypted message..."
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <button
-                id="run-simulator-btn"
-                className="btn btn-primary"
-                onClick={handleSimulatePayment}
-              >
-                <Zap size={18} />
-                <span>Simulate Shielded Payment & Dispatch Webhook</span>
-              </button>
-
-              <button
-                className="btn btn-secondary"
-                onClick={() => setActiveTab('overview')}
-              >
-                <span>View in Live Stream</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 5: API DOCS & SDK SNIPPETS */}
-      {activeTab === 'docs' && (
-        <div className="animate-fade-in">
-          <div className="panel">
-            <div className="panel-title" style={{ marginBottom: '1rem' }}>
-              <Code size={20} color="var(--cyan-accent)" />
-              <span>Interactive Developer API Documentation</span>
-            </div>
-            <p className="panel-desc" style={{ marginBottom: '1.5rem' }}>
-              Integrate ZecShield directly into your e-commerce platform, mobile wallet, or bot.
-            </p>
-
-            {/* Snippet 1 */}
-            <div style={{ marginBottom: '2rem' }}>
-              <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--zec-gold)' }}>
-                1. Register a Viewing Key (cURL)
-              </h4>
-              <div className="code-block">
+            <div className="table-card">
+              <div className="card-header-row">
+                <div className="card-title-text">Quickstart Example (Node.js / Express Webhook Listener)</div>
                 <button
-                  className="copy-btn"
-                  onClick={() =>
-                    copyToClipboard(
-                      `curl -X POST http://localhost:3001/api/v1/keys \\
-  -H "Content-Type: application/json" \\
-  -d '{"key": "uviewtest1...", "label": "My Store", "birth_height": 4500000}'`,
-                      'cURL Snippet'
-                    )
-                  }
-                >
-                  Copy
-                </button>
-                <pre>{`curl -X POST http://localhost:3001/api/v1/keys \\
-  -H "Content-Type: application/json" \\
-  -d '{"key": "uviewtest1...", "label": "My Store", "birth_height": 4500000}'`}</pre>
-              </div>
-            </div>
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyToClipboard(
+`import express from 'express';
+import crypto from 'crypto';
 
-            {/* Snippet 2 */}
-            <div style={{ marginBottom: '2rem' }}>
-              <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--zec-green)' }}>
-                2. Query Confirmed Shielded Payments & Decrypted Memos (Node.js / TypeScript)
-              </h4>
-              <div className="code-block">
-                <button
-                  className="copy-btn"
-                  onClick={() =>
-                    copyToClipboard(
-                      `const res = await fetch('http://localhost:3001/api/v1/transactions');
-const { transactions } = await res.json();
+const app = express();
+app.use(express.json());
 
-transactions.forEach((tx) => {
-  console.log(\`Received \${tx.amount_zec} ZEC in block #\${tx.block_height}\`);
-  console.log(\`Decrypted Memo: \${tx.memo_text}\`);
-});`,
-                      'TypeScript Snippet'
-                    )
-                  }
-                >
-                  Copy
-                </button>
-                <pre>{`const res = await fetch('http://localhost:3001/api/v1/transactions');
-const { transactions } = await res.json();
+const WEBHOOK_SECRET = 'your-secret-here';
 
-transactions.forEach((tx) => {
-  console.log(\`Received \${tx.amount_zec} ZEC in block #\${tx.block_height}\`);
-  console.log(\`Decrypted Memo: \${tx.memo_text}\`);
-});`}</pre>
-              </div>
-            </div>
-
-            {/* Snippet 3 */}
-            <div>
-              <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--orchard-purple)' }}>
-                3. Verify Incoming Webhook HMAC-SHA256 Signature (Node.js Express)
-              </h4>
-              <div className="code-block">
-                <button
-                  className="copy-btn"
-                  onClick={() =>
-                    copyToClipboard(
-                      `import crypto from 'crypto';
-
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhooks/zcash', (req, res) => {
   const signature = req.headers['x-zecshield-signature'];
-  const expected = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET)
-                         .update(req.body)
-                         .digest('hex');
+  const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(JSON.stringify(req.body)).digest('hex');
 
   if (signature !== expected) {
     return res.status(401).send('Invalid signature');
   }
 
-  const payload = JSON.parse(req.body);
-  console.log('Payment verified! Memo:', payload.data.memo);
-  res.status(200).send('OK');
-});`,
-                      'HMAC Webhook Snippet'
-                    )
-                  }
-                >
-                  Copy
-                </button>
-                <pre>{`import crypto from 'crypto';
+  const { event, data } = req.body;
+  if (event === 'shielded_note.detected') {
+    console.log(\`Received \${data.amount_zec} ZEC in block #\${data.block_height}!\`);
+    console.log(\`Pool: \${data.pool}, Memo: \${data.memo}\`);
+  }
 
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.listen(8080);`,
+                    'Node.js Snippet'
+                  )}
+                >
+                  <Copy size={13} />
+                  <span>Copy Code</span>
+                </button>
+              </div>
+
+              <div className="code-preview-box">
+                <pre style={{ margin: 0 }}>
+{`// 1. Verify HMAC-SHA256 signature and process payment
+import express from 'express';
+import crypto from 'crypto';
+
+const app = express();
+app.use(express.json());
+
+const WEBHOOK_SECRET = 'your-webhook-secret';
+
+app.post('/webhooks/zcash', (req, res) => {
   const signature = req.headers['x-zecshield-signature'];
-  const expected = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET)
-                         .update(req.body)
-                         .digest('hex');
+  const expected = crypto
+    .createHmac('sha256', WEBHOOK_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
 
   if (signature !== expected) {
     return res.status(401).send('Invalid signature');
   }
 
-  const payload = JSON.parse(req.body);
-  console.log('Payment verified! Memo:', payload.data.memo);
+  const { event, data } = req.body;
+  if (event === 'shielded_note.detected') {
+    console.log(\`Shielded payment received!\`);
+    console.log(\`TxID: \${data.txid}\`);
+    console.log(\`Amount: \${data.amount_zec} ZEC (\${data.pool} pool)\`);
+    console.log(\`Decrypted Memo: \${data.memo}\`);
+  }
+
   res.status(200).send('OK');
-});`}</pre>
+});`}
+                </pre>
+              </div>
+            </div>
+
+            {/* REST Endpoints Table */}
+            <div className="table-card">
+              <div className="card-header-row">
+                <div className="card-title-text">Available REST Endpoints</div>
+              </div>
+
+              <div className="data-table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Method</th>
+                      <th>Endpoint</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span className="badge badge-incoming" style={{ fontFamily: 'var(--font-mono)' }}>GET</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>/api/v1/status</td>
+                      <td>Get gateway syncer status, current block tip, and total indexed metrics.</td>
+                    </tr>
+                    <tr>
+                      <td><span className="badge badge-incoming" style={{ fontFamily: 'var(--font-mono)' }}>GET</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>/api/v1/transactions</td>
+                      <td>Query confirmed and decrypted shielded notes across all pools with memos.</td>
+                    </tr>
+                    <tr>
+                      <td><span className="badge badge-ironwood" style={{ fontFamily: 'var(--font-mono)' }}>POST</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>/api/v1/keys</td>
+                      <td>Register a new Viewing Key (UFVK / IVK) to queue background chain trial-decryption.</td>
+                    </tr>
+                    <tr>
+                      <td><span className="badge badge-ironwood" style={{ fontFamily: 'var(--font-mono)' }}>POST</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>/api/v1/webhooks</td>
+                      <td>Register an HTTP destination endpoint for instant note notifications.</td>
+                    </tr>
+                    <tr>
+                      <td><span className="badge badge-ironwood" style={{ fontFamily: 'var(--font-mono)' }}>POST</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>/api/v1/simulator/simulate</td>
+                      <td>Inject a simulated shielded payment and trigger real webhooks.</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
+        )}
+      </main>
+
+      {/* Floating Toast Notification */}
+      {actionMessage && (
+        <div className={`toast-floating ${actionMessage.type}`}>
+          {actionMessage.type === 'success' ? <CheckCircle2 size={18} color="var(--orange-primary)" /> : <AlertCircle size={18} />}
+          <span>{actionMessage.text}</span>
         </div>
       )}
     </div>
