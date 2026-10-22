@@ -20,7 +20,7 @@ export interface ShieldedNoteRecord {
   txid: string;
   block_height: number;
   block_time: number;
-  pool: 'Orchard' | 'Sapling';
+  pool: 'Orchard' | 'Sapling' | 'Ironwood';
   amount_zat: number;
   amount_zec: number;
   transfer_type: string;

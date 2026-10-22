@@ -53,7 +53,7 @@ interface ShieldedTransaction {
   txid: string;
   block_height: number;
   block_time: number;
-  pool: 'Orchard' | 'Sapling';
+  pool: 'Orchard' | 'Sapling' | 'Ironwood';
   amount_zat: number;
   amount_zec: number;
   transfer_type: string;
@@ -93,7 +93,7 @@ export default function App() {
   // Forms state
   const [newKey, setNewKey] = useState({ key: '', label: '', birth_height: '4500000', key_type: 'UFVK' });
   const [newWebhook, setNewWebhook] = useState({ target_url: '', description: '', secret: '' });
-  const [simParams, setSimParams] = useState({ amount_zec: '1.25', memo: 'Invoice #ZEC-9012 - Paid with Shielded Zcash', pool: 'Orchard' });
+  const [simParams, setSimParams] = useState<{ amount_zec: string; memo: string; pool: 'Orchard' | 'Sapling' | 'Ironwood' }>({ amount_zec: '1.25', memo: 'Invoice #ZEC-9012 - Paid with Shielded Zcash', pool: 'Ironwood' });
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -448,6 +448,7 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <span className="badge badge-ironwood">NU6.3 (Ironwood)</span>
                 <span className="badge badge-orchard">Halo 2 (Orchard)</span>
                 <span className="badge badge-sapling">Groth16 (Sapling)</span>
               </div>
@@ -506,7 +507,7 @@ export default function App() {
                           </span>
                         </td>
                         <td>
-                          <span className={`badge ${tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
+                          <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
                             {tx.pool}
                           </span>
                           {tx.is_simulated ? (
@@ -918,8 +919,9 @@ export default function App() {
                 <select
                   className="form-select"
                   value={simParams.pool}
-                  onChange={(e) => setSimParams({ ...simParams, pool: e.target.value as 'Orchard' | 'Sapling' })}
+                  onChange={(e) => setSimParams({ ...simParams, pool: e.target.value as 'Orchard' | 'Sapling' | 'Ironwood' })}
                 >
+                  <option value="Ironwood">Ironwood (ZIP 2005 / NU6.3 Lead Byte 0x03)</option>
                   <option value="Orchard">Orchard (Halo 2 zk-SNARKs, Unified Address)</option>
                   <option value="Sapling">Sapling (Groth16 zk-SNARKs)</option>
                 </select>

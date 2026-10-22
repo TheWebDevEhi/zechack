@@ -35,50 +35,81 @@ export function transformV6toV5(raw: Buffer, network: 'testnet' | 'mainnet' = 't
   const expiryHeight = raw.slice(16, 20);
   const numSaplingOutputs = raw[23];
 
+  let saplingOutputs = Buffer.alloc(0);
+  let saplingProofs = Buffer.alloc(0);
+  let saplingBindingSig = Buffer.alloc(0);
+
+  let offset = 24;
+
   if (numSaplingOutputs > 0) {
-    // Sapling bundle present in v6 layout:
-    // Fixed 756-byte output descriptions followed by zkproofs (192 bytes each) and binding signature (64 bytes)
-    const saplingOutputs = raw.slice(24, 24 + numSaplingOutputs * 756);
-    const proofs = raw.slice(24 + numSaplingOutputs * 756, 24 + numSaplingOutputs * 756 + numSaplingOutputs * 192);
-    const bindingSig = raw.slice(24 + numSaplingOutputs * 756 + numSaplingOutputs * 192, 24 + numSaplingOutputs * 756 + numSaplingOutputs * 192 + 64);
+    const outputsLen = numSaplingOutputs * 756;
+    saplingOutputs = raw.slice(offset, offset + outputsLen);
+    offset += outputsLen;
 
-    return Buffer.concat([
-      Buffer.from([0x05, 0x00, 0x00, 0x80]), // header v5 (0x80000005)
-      Buffer.from([0x0a, 0x27, 0xa7, 0x26]), // version_group_id (0x26a7270a)
-      consensusBranchId,
-      Buffer.from([0x00, 0x00, 0x00, 0x00]), // lock_time: 0
-      expiryHeight,
-      Buffer.from([0x00]),                   // vin count: 0
-      Buffer.from([0x00]),                   // vout count: 0
-      Buffer.from([0x00]),                   // sapling spend count: 0
-      Buffer.from([numSaplingOutputs]),      // sapling output count
-      saplingOutputs,                        // Sapling output descriptions (756 bytes each)
-      Buffer.alloc(8),                       // valueBalanceSapling
-      proofs,                                // zkproofs (192 bytes each)
-      bindingSig,                            // bindingSig (64 bytes)
-      Buffer.from([0x00])                    // orchard actions count: 0
-    ]);
+    // Skip valueBalanceSapling (8 bytes)
+    offset += 8;
+
+    const proofsLen = numSaplingOutputs * 192;
+    saplingProofs = raw.slice(offset, offset + proofsLen);
+    offset += proofsLen;
+
+    saplingBindingSig = raw.slice(offset, offset + 64);
+    offset += 64;
   }
 
-  // Pure Orchard / Ironwood bundle (0 Sapling outputs)
-  const numActions = raw[25];
-  if (numActions > 0) {
-    const orchardPart = raw.slice(24);
-    return Buffer.concat([
-      Buffer.from([0x05, 0x00, 0x00, 0x80]), // header v5
-      Buffer.from([0x0a, 0x27, 0xa7, 0x26]), // version_group_id
-      consensusBranchId,
-      Buffer.from([0x00, 0x00, 0x00, 0x00]), // lock_time: 0
-      expiryHeight,
-      Buffer.from([0x00]),                   // vin count: 0
-      Buffer.from([0x00]),                   // vout count: 0
-      Buffer.from([0x00]),                   // sapling spend count: 0
-      Buffer.from([0x00]),                   // sapling output count: 0
-      orchardPart                            // Orchard / Ironwood bundle
-    ]);
+  // Offset now points to Orchard / Ironwood section in V6
+  const nActionsOrchard = offset < raw.length ? raw[offset] : 0;
+  const nActionsIronwood = offset + 1 < raw.length ? raw[offset + 1] : 0;
+
+  let orchardBundle = Buffer.from([0x00]); // default: 0 actions
+
+  if (nActionsOrchard > 0) {
+    // Orchard bundle present directly
+    orchardBundle = Buffer.from(raw.slice(offset));
+  } else if (nActionsIronwood > 0) {
+    // Ironwood bundle present (NU6.3): skip the 0x00 nActionsOrchard byte
+    // so nActionsIronwood becomes the action count in the canonical v5 layout
+    orchardBundle = Buffer.from(raw.slice(offset + 1));
   }
 
-  return raw;
+  // Canonical v5 flag normalization:
+  // In v5 (ZIP 225), flagsOrchard must only have bits 0 and 1 set (enableSpends and enableOutputs).
+  // In v6 (ZIP 229), bit 2 is introduced for Ironwood/NU6.3. Mask with 0x03 so legacy v5 parsers accept the bundle.
+  const actionCount = orchardBundle[0];
+  if (actionCount > 0) {
+    const flagsOffset = 1 + actionCount * 820;
+    if (flagsOffset < orchardBundle.length) {
+      orchardBundle[flagsOffset] = orchardBundle[flagsOffset] & 0x03;
+    }
+  }
+
+  const v5Header = Buffer.concat([
+    Buffer.from([0x05, 0x00, 0x00, 0x80]), // header v5 (0x80000005)
+    Buffer.from([0x0a, 0x27, 0xa7, 0x26]), // version_group_id (0x26a7270a)
+    consensusBranchId,
+    Buffer.from([0x00, 0x00, 0x00, 0x00]), // lock_time: 0
+    expiryHeight,
+    Buffer.from([0x00]),                   // vin count: 0
+    Buffer.from([0x00]),                   // vout count: 0
+    Buffer.from([0x00]),                   // sapling spend count: 0
+    Buffer.from([numSaplingOutputs]),      // sapling output count
+  ]);
+
+  if (numSaplingOutputs > 0) {
+    return Buffer.concat([
+      v5Header,
+      saplingOutputs,
+      Buffer.alloc(8), // valueBalanceSapling
+      saplingProofs,
+      saplingBindingSig,
+      orchardBundle
+    ]);
+  } else {
+    return Buffer.concat([
+      v5Header,
+      orchardBundle
+    ]);
+  }
 }
 
 /**
@@ -124,31 +155,18 @@ export class ProtocolAdapterProxy {
         this.upstream.GetLatestBlock(call.request, callback);
       },
       GetBlock: (call: any, callback: any) => {
-        this.upstream.GetBlock(call.request, (err: any, block: any) => {
-          if (err) return callback(err);
-          callback(null, transformBlock(block));
-        });
+        this.upstream.GetBlock(call.request, callback);
       },
       GetBlockRange: (call: any) => {
         const upstreamStream = this.upstream.GetBlockRange(call.request);
         upstreamStream.on('data', (block: any) => {
-          call.write(transformBlock(block));
+          call.write(block);
         });
         upstreamStream.on('end', () => call.end());
         upstreamStream.on('error', (err: any) => call.destroy(err));
       },
       GetTransaction: (call: any, callback: any) => {
-        this.upstream.GetTransaction(call.request, (err: any, res: any) => {
-          if (err) return callback(err);
-          try {
-            const original = Buffer.from(res.data, 'base64');
-            const transformed = transformV6toV5(original, config.network);
-            callback(null, { data: transformed.toString('base64') });
-          } catch (adaptErr) {
-            // Fallback to original if transformation encounters unexpected input
-            callback(null, res);
-          }
-        });
+        this.upstream.GetTransaction(call.request, callback);
       },
       GetLightdInfo: (call: any, callback: any) => {
         this.upstream.GetLightdInfo(call.request, callback);

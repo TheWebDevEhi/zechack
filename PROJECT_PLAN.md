@@ -225,3 +225,5 @@ ZecShield abstracts away the cryptographic complexity:
 | **M3: Webhook Delivery System** | Asynchronous webhook queue with HMAC signatures. | Successfully fires an HTTP POST to `webhook.site` upon note discovery. |
 | **M4: Developer Dashboard UI** | Full-featured frontend web app. | Users can interact with the system entirely through the browser. |
 | **M5: Polished Demo & Packaging** | One-command startup, sample test scripts, demo video. | Complete end-to-end payment demonstration ready for hackathon judges. |
+| **M6: Multi-Pool & NU6.3 Ironwood** | Native support for ZIP 2005 / Version 6 transactions. | Natively scans and trial-decrypts Ironwood, Orchard, and Sapling transactions with full memo extraction and deduplicated webhook delivery. |
+

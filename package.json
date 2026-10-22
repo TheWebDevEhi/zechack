@@ -31,6 +31,7 @@
     "@grpc/proto-loader": "^0.8.1",
     "@ledgerhq/zcash-decrypt": "^0.2.0",
     "@ledgerhq/zcash-shielded": "^0.10.0",
+    "@ledgerhq/zcash-utils": "^2.7.0",
     "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",

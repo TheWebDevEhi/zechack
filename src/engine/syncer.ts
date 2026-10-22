@@ -80,7 +80,7 @@ export class ChainSyncer {
     }
 
     const batchSize = Math.max(config.batchSize, 500);
-    const targetGrpcUrl = protocolAdapterProxy.getUrl() || config.lightwalletdUrl;
+    const targetGrpcUrl = config.lightwalletdUrl;
 
     // Fast catch-up loop: continuously process batches until caught up to chainTip
     while (startHeight <= chainTip && this.isRunning) {
@@ -104,6 +104,29 @@ export class ChainSyncer {
         while ((tx = await stream.next()) !== null) {
           matchedCount++;
           console.log(`[Syncer] Match found! TxID: ${tx.txid} in block ${tx.blockHeight}`);
+
+          // Process Ironwood Notes (NU6.3 / ZIP 2005)
+          const ironwoodNotes = (tx as any).ironwoodNotes;
+          if (ironwoodNotes && ironwoodNotes.length > 0) {
+            for (const note of ironwoodNotes) {
+              const saved = dbService.addShieldedNote({
+                key_id: key.id,
+                txid: tx.txid,
+                block_height: tx.blockHeight,
+                block_time: tx.blockTime,
+                pool: 'Ironwood',
+                amount_zat: note.amount,
+                amount_zec: note.amount / 100_000_000,
+                transfer_type: note.transferType,
+                memo_text: note.memo,
+                is_simulated: 0
+              });
+              if (saved) {
+                console.log(`[Syncer] Dispatched Ironwood note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                await WebhookDispatcher.dispatchNote(saved);
+              }
+            }
+          }
 
           // Process Orchard Notes
           if (tx.orchardNotes && tx.orchardNotes.length > 0) {
