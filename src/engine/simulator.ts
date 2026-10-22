@@ -6,7 +6,7 @@ export interface SimulatePaymentOptions {
   keyId?: number;
   amountZec: number;
   memo: string;
-  pool?: string;
+  pool?: 'Orchard' | 'Sapling' | 'Ironwood';
   transferType?: 'incoming' | 'outgoing' | 'internal';
   txid?: string;
   blockHeight?: number;

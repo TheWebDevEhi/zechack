@@ -6,6 +6,15 @@ export class WebhookDispatcher {
    * Dispatches a detected shielded note event to all active webhooks.
    */
   public static async dispatchNote(note: ShieldedNoteRecord): Promise<void> {
+    // 1. Filter out internal wallet change notes from triggering payment webhooks.
+    // In Zcash shielded transactions, sending funds produces an external recipient note
+    // and an internal change note back to the sender's own address.
+    // Internal change notes must not trigger payment notifications.
+    if (note.transfer_type === 'internal') {
+      console.log(`[Webhook] Skipping internal change note ID #${note.id} for tx ${note.txid} (${note.amount_zec} ZEC)`);
+      return;
+    }
+
     const activeWebhooks = dbService.getActiveWebhooks();
     if (!activeWebhooks.length) {
       return;
@@ -32,6 +41,12 @@ export class WebhookDispatcher {
     const payloadJson = JSON.stringify(payload);
 
     for (const webhook of activeWebhooks) {
+      // 2. Prevent duplicate delivery if this transaction or note was already delivered to this endpoint
+      if (dbService.hasDeliveredTxid(webhook.id, note.txid) || dbService.hasSuccessfulDelivery(webhook.id, note.id)) {
+        console.log(`[Webhook] Transaction ${note.txid} (note #${note.id}) was already successfully delivered to webhook #${webhook.id}. Skipping duplicate.`);
+        continue;
+      }
+
       await this.sendWithRetry(webhook, note.id, payloadJson, 3);
     }
   }

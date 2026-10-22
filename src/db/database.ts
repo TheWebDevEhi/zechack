@@ -368,6 +368,33 @@ export class DatabaseService {
     return list;
   }
 
+  public hasSuccessfulDelivery(webhookId: number, noteId: number): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const stmt = this.db.prepare(`
+      SELECT id FROM webhook_deliveries 
+      WHERE webhook_id = ? AND note_id = ? AND status_code >= 200 AND status_code < 300 
+      LIMIT 1
+    `);
+    stmt.bind([webhookId, noteId]);
+    const exists = stmt.step();
+    stmt.free();
+    return exists;
+  }
+
+  public hasDeliveredTxid(webhookId: number, txid: string): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const stmt = this.db.prepare(`
+      SELECT wd.id FROM webhook_deliveries wd 
+      JOIN shielded_notes sn ON wd.note_id = sn.id 
+      WHERE wd.webhook_id = ? AND sn.txid = ? AND wd.status_code >= 200 AND wd.status_code < 300 
+      LIMIT 1
+    `);
+    stmt.bind([webhookId, txid]);
+    const exists = stmt.step();
+    stmt.free();
+    return exists;
+  }
+
   // --- Stats ---
   public getStats(): { totalKeys: number; totalNotes: number; totalZat: number } {
     if (!this.db) throw new Error('Database not initialized');

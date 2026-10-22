@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { dbService } from '../db/database.js';
 import { chainSyncer } from '../engine/syncer.js';
 import { PaymentSimulator } from '../engine/simulator.js';
+import { WebhookDispatcher } from '../webhooks/dispatcher.js';
 import { config } from '../config.js';
 
 export const apiRouter = Router();
@@ -79,7 +80,7 @@ apiRouter.get('/keys', (req: Request, res: Response) => {
 
 apiRouter.delete('/keys/:id', (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
@@ -94,7 +95,7 @@ apiRouter.delete('/keys/:id', (req: Request, res: Response) => {
 });
 apiRouter.delete('/viewing-keys/:id', (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
@@ -203,7 +204,7 @@ apiRouter.get('/webhooks', (req: Request, res: Response) => {
 
 apiRouter.delete('/webhooks/:id', (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid webhook ID' });
     }

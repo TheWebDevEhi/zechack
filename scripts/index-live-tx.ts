@@ -27,7 +27,7 @@ async function main() {
     amount_zat: amountZat,
     amount_zec: amountZec,
     transfer_type: 'incoming',
-    memo_text: null,
+    memo_text: '',
     is_simulated: 0
   });
 
