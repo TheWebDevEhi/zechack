@@ -507,21 +507,30 @@ export default function App() {
                           </span>
                         </td>
                         <td>
-                          <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
-                            {tx.pool}
-                          </span>
-                          {tx.is_simulated ? (
-                            <span className="badge badge-simulated" style={{ marginLeft: '0.35rem' }}>
-                              Simulated
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
+                              {tx.pool}
                             </span>
-                          ) : null}
+                            <span className={`badge ${tx.transfer_type === 'outgoing' ? 'badge-outgoing' : tx.transfer_type === 'internal' ? 'badge-internal' : 'badge-incoming'}`} style={{ fontSize: '0.65rem' }}>
+                              {tx.transfer_type === 'outgoing' ? 'Outward' : tx.transfer_type === 'internal' ? 'Change' : 'Inward'}
+                            </span>
+                            {tx.is_simulated ? (
+                              <span className="badge badge-simulated" style={{ fontSize: '0.65rem' }}>
+                                Simulated
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
                         <td>
-                          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--zec-gold)' }}>
-                            +{tx.amount_zec.toFixed(4)} ZEC
+                          <div style={{ 
+                            fontWeight: 700, 
+                            fontSize: '0.95rem', 
+                            color: tx.transfer_type === 'outgoing' ? '#fb7185' : tx.transfer_type === 'internal' ? 'var(--text-muted)' : 'var(--zec-green)' 
+                          }}>
+                            {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zec.toFixed(4)} ZEC
                           </div>
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                            {tx.amount_zat.toLocaleString()} zat
+                            {tx.transfer_type === 'outgoing' ? '-' : '+'}{tx.amount_zat.toLocaleString()} zat
                           </div>
                         </td>
                         <td>

@@ -456,6 +456,24 @@ body {
   border: 1px solid rgba(244, 183, 40, 0.3);
 }
 
+.badge-incoming {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.badge-outgoing {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fb7185;
+  border: 1px solid rgba(251, 113, 133, 0.3);
+}
+
+.badge-internal {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+  border: 1px solid rgba(203, 213, 225, 0.25);
+}
+
 .memo-tag {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
