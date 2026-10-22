@@ -70,9 +70,12 @@ export class ChainSyncer {
     let startHeight = key.last_scanned_height;
     if (startHeight <= 0) {
       startHeight = key.birth_height > 0 ? key.birth_height : Math.max(1, chainTip - 100);
+    } else {
+      // The last_scanned_height block was already fully scanned; advance by 1 to prevent scanning the same block twice
+      startHeight = startHeight + 1;
     }
 
-    if (startHeight >= chainTip) {
+    if (startHeight > chainTip) {
       return; // Already up to date
     }
 
@@ -80,8 +83,8 @@ export class ChainSyncer {
     const targetGrpcUrl = protocolAdapterProxy.getUrl() || config.lightwalletdUrl;
 
     // Fast catch-up loop: continuously process batches until caught up to chainTip
-    while (startHeight < chainTip && this.isRunning) {
-      const endHeight = Math.min(chainTip, startHeight + batchSize);
+    while (startHeight <= chainTip && this.isRunning) {
+      const endHeight = Math.min(chainTip, startHeight + batchSize - 1);
 
       try {
         console.log(`[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) blocks ${startHeight} to ${endHeight} (tip: ${chainTip})...`);
@@ -149,12 +152,12 @@ export class ChainSyncer {
 
         // Update checkpoint after each successful batch
         dbService.updateLastScannedHeight(key.id, endHeight);
-        startHeight = endHeight;
+        startHeight = endHeight + 1;
       } catch (err: any) {
         console.error(`[Syncer] Scan error for key #${key.id} in range ${startHeight}-${endHeight}:`, err.message);
         // Advance slightly so syncer is not stuck forever, then wait for next cycle
-        startHeight = Math.min(chainTip, startHeight + 100);
-        dbService.updateLastScannedHeight(key.id, startHeight);
+        const nextCheckpoint = Math.min(chainTip, endHeight);
+        dbService.updateLastScannedHeight(key.id, nextCheckpoint);
         break;
       }
     }

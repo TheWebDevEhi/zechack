@@ -77,6 +77,37 @@ apiRouter.get('/keys', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.delete('/keys/:id', (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid key ID' });
+    }
+    const deleted = dbService.deleteViewingKey(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Viewing key not found' });
+    }
+    res.json({ message: 'Viewing key and associated notes deleted successfully', id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+apiRouter.delete('/viewing-keys/:id', (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid key ID' });
+    }
+    const deleted = dbService.deleteViewingKey(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Viewing key not found' });
+    }
+    res.json({ message: 'Viewing key and associated notes deleted successfully', id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Transactions & Shielded Notes ---
 apiRouter.get('/transactions', (req: Request, res: Response) => {
   try {
@@ -165,6 +196,22 @@ apiRouter.get('/webhooks', (req: Request, res: Response) => {
   try {
     const webhooks = dbService.getActiveWebhooks();
     res.json({ webhooks });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/webhooks/:id', (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid webhook ID' });
+    }
+    const deleted = dbService.deleteWebhook(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Webhook not found' });
+    }
+    res.json({ message: 'Webhook and associated delivery history deleted successfully', id });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

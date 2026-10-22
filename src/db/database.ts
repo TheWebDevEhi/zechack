@@ -206,6 +206,27 @@ export class DatabaseService {
     this.save();
   }
 
+  public deleteViewingKey(id: number): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const checkStmt = this.db.prepare('SELECT id FROM viewing_keys WHERE id = ?');
+    checkStmt.bind([id]);
+    const exists = checkStmt.step();
+    checkStmt.free();
+    if (!exists) return false;
+
+    // Delete associated notes and viewing key
+    const notesStmt = this.db.prepare('DELETE FROM shielded_notes WHERE key_id = ?');
+    notesStmt.run([id]);
+    notesStmt.free();
+
+    const delStmt = this.db.prepare('DELETE FROM viewing_keys WHERE id = ?');
+    delStmt.run([id]);
+    delStmt.free();
+
+    this.save();
+    return true;
+  }
+
   // --- Shielded Notes ---
   public addShieldedNote(note: Omit<ShieldedNoteRecord, 'id' | 'created_at'>): ShieldedNoteRecord | null {
     if (!this.db) throw new Error('Database not initialized');
@@ -230,11 +251,19 @@ export class DatabaseService {
       now
     ]);
     stmt.free();
+
+    // Check if a row was actually inserted
+    const rowsModified = this.db.getRowsModified();
+    if (rowsModified === 0) {
+      // Note was already indexed; return null so callers do not dispatch duplicate webhooks
+      return null;
+    }
+
     this.save();
 
     // Query back the newly inserted note
-    const q = this.db.prepare('SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ?');
-    q.bind([note.key_id, note.txid, note.pool]);
+    const q = this.db.prepare('SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ? AND amount_zat = ?');
+    q.bind([note.key_id, note.txid, note.pool, note.amount_zat]);
     if (q.step()) {
       const res = q.getAsObject() as unknown as ShieldedNoteRecord;
       q.free();
@@ -351,6 +380,27 @@ export class DatabaseService {
     };
   }
 
+  public deleteWebhook(id: number): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const checkStmt = this.db.prepare('SELECT id FROM webhooks WHERE id = ?');
+    checkStmt.bind([id]);
+    const exists = checkStmt.step();
+    checkStmt.free();
+    if (!exists) return false;
+
+    // Delete deliveries associated with this webhook and the webhook record
+    const delivStmt = this.db.prepare('DELETE FROM webhook_deliveries WHERE webhook_id = ?');
+    delivStmt.run([id]);
+    delivStmt.free();
+
+    const stmt = this.db.prepare('DELETE FROM webhooks WHERE id = ?');
+    stmt.run([id]);
+    stmt.free();
+
+    this.save();
+    return true;
+  }
+
   // --- Reset Database ---
   public resetDatabase(options: { keepKeys?: boolean } = {}): void {
     if (!this.db) throw new Error('Database not initialized');
@@ -358,6 +408,7 @@ export class DatabaseService {
       this.db.run(`
         DELETE FROM shielded_notes;
         DELETE FROM webhook_deliveries;
+        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries');
       `);
     } else {
       this.db.run(`
@@ -365,6 +416,7 @@ export class DatabaseService {
         DELETE FROM webhook_deliveries;
         DELETE FROM webhooks;
         DELETE FROM viewing_keys;
+        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries', 'webhooks', 'viewing_keys');
       `);
     }
     this.save();

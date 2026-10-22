@@ -16,7 +16,8 @@ import {
   Radio,
   Clock,
   Code,
-  RotateCcw
+  RotateCcw,
+  Trash2
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -213,6 +214,40 @@ export default function App() {
       const data = await res.json();
       showToast(data.message || 'Database reset successfully!');
       fetchData();
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleDeleteKey = async (id: number, label: string) => {
+    const confirmed = window.confirm(`Remove viewing key "${label}" (#${id}) and its indexed notes?`);
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/v1/keys/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Viewing key removed successfully!');
+        fetchData();
+      } else {
+        showToast(data.error || 'Failed to remove key', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleDeleteWebhook = async (id: number, url: string) => {
+    const confirmed = window.confirm(`Remove webhook endpoint "${url}" (#${id})?`);
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/v1/webhooks/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Webhook removed successfully!');
+        fetchData();
+      } else {
+        showToast(data.error || 'Failed to remove webhook', 'error');
+      }
     } catch (err: any) {
       showToast(err.message, 'error');
     }
@@ -589,6 +624,7 @@ export default function App() {
                       <th>Birthday</th>
                       <th>Scanned Height</th>
                       <th>Sync Status</th>
+                      <th style={{ textAlign: 'right' }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -636,6 +672,25 @@ export default function App() {
                             </div>
                             <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{k.sync_percent}%</span>
                           </div>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button
+                            className="btn btn-secondary"
+                            style={{
+                              padding: '0.3rem 0.65rem',
+                              fontSize: '0.75rem',
+                              color: '#ff6b6b',
+                              borderColor: 'rgba(255, 107, 107, 0.3)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => handleDeleteKey(k.id, k.label)}
+                            title="Remove viewing key"
+                          >
+                            <Trash2 size={13} /> Remove
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -723,6 +778,7 @@ export default function App() {
                         <th>URL</th>
                         <th>Secret</th>
                         <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -748,6 +804,25 @@ export default function App() {
                           </td>
                           <td>
                             <span className="badge badge-sapling">Active</span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{
+                                padding: '0.3rem 0.65rem',
+                                fontSize: '0.75rem',
+                                color: '#ff6b6b',
+                                borderColor: 'rgba(255, 107, 107, 0.3)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => handleDeleteWebhook(w.id, w.target_url)}
+                              title="Remove webhook"
+                            >
+                              <Trash2 size={13} /> Remove
+                            </button>
                           </td>
                         </tr>
                       ))}
