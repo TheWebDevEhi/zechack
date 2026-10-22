@@ -1,6 +1,7 @@
 import { startSync, getChainTip, ShieldedTransaction } from '@ledgerhq/zcash-utils';
 import { dbService, ViewingKeyRecord } from '../db/database.js';
 import { WebhookDispatcher } from '../webhooks/dispatcher.js';
+import { protocolAdapterProxy } from './proxy.js';
 import { config } from '../config.js';
 
 export class ChainSyncer {
@@ -12,6 +13,14 @@ export class ChainSyncer {
     if (this.isRunning) return;
     this.isRunning = true;
     console.log(`[Syncer] Starting Zcash Chain Scanner on ${config.network} (${config.lightwalletdUrl})...`);
+
+    // Start local protocol adapter proxy for automatic Version 6 (ZIP 229) & multi-pool normalization
+    try {
+      const proxyUrl = await protocolAdapterProxy.start();
+      console.log(`[Syncer] Protocol Adapter Proxy online at ${proxyUrl}`);
+    } catch (err: any) {
+      console.warn(`[Syncer] Failed to start adapter proxy, falling back to upstream: ${err.message}`);
+    }
 
     // Run first cycle immediately
     await this.syncCycle();
@@ -30,6 +39,7 @@ export class ChainSyncer {
       clearInterval(this.timer);
       this.timer = null;
     }
+    protocolAdapterProxy.stop().catch(() => {});
     console.log('[Syncer] Stopped chain scanner.');
   }
 
@@ -67,6 +77,7 @@ export class ChainSyncer {
     }
 
     const batchSize = Math.max(config.batchSize, 500);
+    const targetGrpcUrl = protocolAdapterProxy.getUrl() || config.lightwalletdUrl;
 
     // Fast catch-up loop: continuously process batches until caught up to chainTip
     while (startHeight < chainTip && this.isRunning) {
@@ -76,7 +87,7 @@ export class ChainSyncer {
         console.log(`[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) blocks ${startHeight} to ${endHeight} (tip: ${chainTip})...`);
 
         const stream = await startSync({
-          grpcUrl: config.lightwalletdUrl,
+          grpcUrl: targetGrpcUrl,
           viewingKey: key.key_string,
           startHeight,
           endHeight,
