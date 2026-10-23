@@ -252,6 +252,111 @@ apiRouter.post('/simulator/simulate', async (req: Request, res: Response) => {
   }
 });
 
+// --- Ephemeral Wallet Pairing Sessions (For Mobile QR & Extensions) ---
+interface WalletPairSession {
+  sessionId: string;
+  createdAt: number;
+  expiresAt: number;
+  status: 'pending' | 'approved' | 'rejected';
+  key?: any;
+}
+
+const pairSessions = new Map<string, WalletPairSession>();
+
+function cleanupSessions() {
+  const now = Date.now();
+  for (const [id, session] of pairSessions.entries()) {
+    if (session.expiresAt < now) {
+      pairSessions.delete(id);
+    }
+  }
+}
+
+// 1. Create a pairing session
+apiRouter.post('/wallet-pair/session', (req: Request, res: Response) => {
+  cleanupSessions();
+  const sessionId = 'zpair_' + crypto.randomBytes(12).toString('hex');
+  const now = Date.now();
+  const expiresAt = now + 5 * 60 * 1000; // 5 minutes validity
+
+  const session: WalletPairSession = {
+    sessionId,
+    createdAt: now,
+    expiresAt,
+    status: 'pending'
+  };
+
+  pairSessions.set(sessionId, session);
+
+  res.json({
+    session_id: sessionId,
+    expires_at: expiresAt,
+    qr_payload: JSON.stringify({
+      app: 'ZecShield Gateway',
+      action: 'connect_wallet',
+      session_id: sessionId,
+      network: config.network,
+      endpoint: `${req.protocol}://${req.get('host')}/api/wallet-pair/session/${sessionId}/approve`
+    })
+  });
+});
+
+// 2. Poll session status
+apiRouter.get('/wallet-pair/session/:id', (req: Request, res: Response) => {
+  cleanupSessions();
+  const id = req.params.id as string;
+  const session = pairSessions.get(id);
+
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found or expired', status: 'expired' });
+  }
+
+  res.json({
+    session_id: session.sessionId,
+    status: session.status,
+    key: session.key || null
+  });
+});
+
+// 3. Approve wallet pairing (from mobile companion or scanner)
+apiRouter.post('/wallet-pair/session/:id/approve', (req: Request, res: Response) => {
+  cleanupSessions();
+  const id = req.params.id as string;
+  const session = pairSessions.get(id);
+
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found or expired' });
+  }
+
+  const { key, label, birth_height, key_type } = req.body;
+  if (!key || typeof key !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid "key" field' });
+  }
+
+  const trimmedKey = key.trim();
+  let existing = dbService.getViewingKeyByString(trimmedKey);
+  let record = existing;
+
+  if (!record) {
+    const determinedType = key_type || (trimmedKey.startsWith('uview') ? 'UFVK' : 'ViewingKey');
+    const birthHeight = parseInt(birth_height, 10) || 0;
+    record = dbService.addViewingKey(
+      trimmedKey,
+      determinedType,
+      label || 'Connected Mobile Wallet',
+      birthHeight
+    );
+  }
+
+  session.status = 'approved';
+  session.key = record;
+
+  res.json({
+    message: 'Wallet successfully approved and registered with ZecShield',
+    key: record
+  });
+});
+
 // --- System & Database Reset ---
 apiRouter.post('/system/reset', (req: Request, res: Response) => {
   try {

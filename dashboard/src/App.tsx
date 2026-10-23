@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import {
   Shield,
   Search,
@@ -19,7 +20,12 @@ import {
   ChevronRight,
   CheckCircle2,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  Wallet,
+  Smartphone,
+  Laptop,
+  X,
+  Check
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -106,6 +112,27 @@ export default function App() {
   });
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  // Wallet Connection Modal state
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState<boolean>(false);
+  const [walletTab, setWalletTab] = useState<'metamask' | 'mobile' | 'extension' | 'manual'>('metamask');
+  const [isConnectingWallet, setIsConnectingWallet] = useState<boolean>(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+
+  // Manual Key Modal & Webhook Modal state
+  const [isManualKeyModalOpen, setIsManualKeyModalOpen] = useState<boolean>(false);
+  const [isWebhookModalOpen, setIsWebhookModalOpen] = useState<boolean>(false);
+
+
+  // Mobile QR pairing state
+  const [mobileSession, setMobileSession] = useState<{ sessionId: string; qrPayload: string; expiresAt: number } | null>(null);
+  const [mobilePairStatus, setMobilePairStatus] = useState<'idle' | 'waiting' | 'approved' | 'expired'>('idle');
+  const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pollingTimerRef = useRef<any>(null);
+
+  // Detected Web3 providers
+  const hasMetaMask = typeof window !== 'undefined' && typeof (window as any).ethereum !== 'undefined';
+  const hasZcashExt = typeof window !== 'undefined' && typeof (window as any).zcash !== 'undefined';
+
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setActionMessage({ text, type });
     setTimeout(() => setActionMessage(null), 4000);
@@ -164,6 +191,8 @@ export default function App() {
       if (res.ok) {
         showToast('Viewing Key registered and scanner queued!');
         setNewKey({ key: '', label: '', birth_height: '4500000', key_type: 'UFVK' });
+        setIsManualKeyModalOpen(false);
+        setIsWalletModalOpen(false);
         fetchData();
       } else {
         showToast(data.error || 'Failed to register key', 'error');
@@ -206,8 +235,10 @@ export default function App() {
       if (res.ok) {
         showToast('Webhook endpoint configured successfully!');
         setNewWebhook({ target_url: '', description: '', secret: '' });
+        setIsWebhookModalOpen(false);
         fetchData();
       } else {
+
         showToast(data.error || 'Failed to create webhook', 'error');
       }
     } catch (err: any) {
@@ -269,6 +300,232 @@ export default function App() {
       }
     } catch (err: any) {
       showToast(err.message, 'error');
+    }
+  };
+
+  // Cleanup mobile polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    };
+  }, []);
+
+  // 1. Mobile Wallet: Start Session & Polling
+  const handleStartMobilePairing = async () => {
+    setIsConnectingWallet(true);
+    setWalletError(null);
+    setMobilePairStatus('waiting');
+    try {
+      const res = await fetch('/api/wallet-pair/session', { method: 'POST' });
+      const data = await res.json();
+      if (data.session_id) {
+        setMobileSession({
+          sessionId: data.session_id,
+          qrPayload: data.qr_payload,
+          expiresAt: data.expires_at
+        });
+
+        setTimeout(() => {
+          if (qrCanvasRef.current) {
+            QRCode.toCanvas(qrCanvasRef.current, data.qr_payload, {
+              width: 210,
+              margin: 1,
+              color: { dark: '#0f172a', light: '#ffffff' }
+            });
+          }
+        }, 150);
+
+        if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+
+        pollingTimerRef.current = setInterval(async () => {
+          try {
+            const pollRes = await fetch(`/api/wallet-pair/session/${data.session_id}`);
+            const pollData = await pollRes.json();
+            if (pollData.status === 'approved') {
+              clearInterval(pollingTimerRef.current);
+              setMobilePairStatus('approved');
+              showToast('Mobile wallet paired successfully! Indexing notes.', 'success');
+              fetchData();
+              setTimeout(() => {
+                setIsWalletModalOpen(false);
+                setMobilePairStatus('idle');
+                setMobileSession(null);
+              }, 1200);
+            }
+          } catch {
+            // Transient network polling failure
+          }
+        }, 2000);
+      }
+    } catch (err: any) {
+      setWalletError('Failed to start mobile pairing session: ' + err.message);
+      setMobilePairStatus('idle');
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  // 1b. Mobile Wallet: Simulation helper for testing
+  const handleSimulateMobileApproval = async () => {
+    if (!mobileSession) {
+      showToast('Please wait for QR session to generate first.', 'error');
+      return;
+    }
+    setIsConnectingWallet(true);
+    try {
+      const res = await fetch(`/api/wallet-pair/session/${mobileSession.sessionId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'uviewtest1m70r2n0qvxq8n8wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f',
+          label: 'Zashi Mobile Wallet (Connected)',
+          birth_height: status?.chain_tip ? status.chain_tip - 500 : 4520000,
+          key_type: 'UFVK'
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMobilePairStatus('approved');
+        showToast('Zashi Mobile Wallet paired & authorized! (Simulated)', 'success');
+        fetchData();
+        setTimeout(() => {
+          setIsWalletModalOpen(false);
+          setMobilePairStatus('idle');
+          setMobileSession(null);
+        }, 1200);
+      } else {
+        setWalletError(data.error || 'Failed to simulate mobile pairing');
+      }
+    } catch (err: any) {
+      setWalletError(err.message);
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  // 2. MetaMask Zcash Snap
+  const handleConnectMetaMask = async () => {
+    setIsConnectingWallet(true);
+    setWalletError(null);
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) {
+        throw new Error('MetaMask is not installed in this browser.');
+      }
+      await ethereum.request({
+        method: 'wallet_requestSnaps',
+        params: {
+          'npm:@chainsafe/metamask-snap-zcash': {}
+        }
+      });
+      const res = await ethereum.request({
+        method: 'wallet_invokeSnap',
+        params: {
+          snapId: 'npm:@chainsafe/metamask-snap-zcash',
+          request: { method: 'getUnifiedViewingKey' }
+        }
+      });
+      const keyString = typeof res === 'string' ? res : res?.key || JSON.stringify(res);
+      if (keyString) {
+        await fetch('/api/v1/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: keyString,
+            label: 'MetaMask Shielded Account',
+            birth_height: status?.chain_tip ? status.chain_tip - 1000 : 4520000,
+            key_type: 'UFVK'
+          })
+        });
+        showToast('MetaMask Zcash Snap connected successfully!', 'success');
+        fetchData();
+        setIsWalletModalOpen(false);
+      }
+    } catch (err: any) {
+      setWalletError(err.message || 'MetaMask connection rejected or Snap not found.');
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  const handleSimulateMetaMaskApproval = async () => {
+    setIsConnectingWallet(true);
+    try {
+      await fetch('/api/v1/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'uviewtest1m70r2n0qvxq8n8wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f',
+          label: 'MetaMask Shielded Account (Snap)',
+          birth_height: status?.chain_tip ? status.chain_tip - 1000 : 4520000,
+          key_type: 'UFVK'
+        })
+      });
+      showToast('MetaMask Zcash Snap connected! (Sandbox Simulation)', 'success');
+      fetchData();
+      setIsWalletModalOpen(false);
+    } catch (err: any) {
+      setWalletError(err.message);
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  // 3. Native Browser Extension (window.zcash)
+  const handleConnectExtension = async () => {
+    setIsConnectingWallet(true);
+    setWalletError(null);
+    try {
+      const zcash = (window as any).zcash;
+      if (!zcash) {
+        throw new Error('No native Zcash extension detected in this window.');
+      }
+      const res = await (zcash.request
+        ? zcash.request({ method: 'zcash_getViewingKey' })
+        : zcash.getViewingKey());
+      const keyString = res?.key || res;
+      if (keyString) {
+        await fetch('/api/v1/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: keyString,
+            label: 'Zcash Web3 Extension',
+            birth_height: status?.chain_tip ? status.chain_tip - 1000 : 4520000,
+            key_type: 'UFVK'
+          })
+        });
+        showToast('Connected native Zcash extension!', 'success');
+        fetchData();
+        setIsWalletModalOpen(false);
+      }
+    } catch (err: any) {
+      setWalletError(err.message || 'Extension connection failed.');
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  const handleSimulateExtension = async () => {
+    setIsConnectingWallet(true);
+    try {
+      await fetch('/api/v1/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'uviewtest1m70r2n0qvxq8n8wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f',
+          label: 'Zcash Browser Extension (Sandbox)',
+          birth_height: status?.chain_tip ? status.chain_tip - 1000 : 4520000,
+          key_type: 'UFVK'
+        })
+      });
+      showToast('Connected native Zcash extension! (Sandbox Simulation)', 'success');
+      fetchData();
+      setIsWalletModalOpen(false);
+    } catch (err: any) {
+      setWalletError(err.message);
+    } finally {
+      setIsConnectingWallet(false);
     }
   };
 
@@ -394,15 +651,6 @@ export default function App() {
             </div>
           </button>
         </nav>
-
-        {/* NU6.3 Protocol Ready Pill */}
-        <div className="sidebar-protocol-container">
-          <div className="sidebar-protocol-pill" title="NU6.3 Protocol Ready (Ironwood v6 Support)">
-            <span className="protocol-pulse-dot" />
-            <Sparkles size={13} />
-            <span>NU6.3 Protocol Ready</span>
-          </div>
-        </div>
       </aside>
 
       {/* ====================================================================
@@ -427,6 +675,19 @@ export default function App() {
           {/* Right Header Info */}
           <div className="top-header-right">
             <button
+              className="btn-connect-wallet"
+              onClick={() => {
+                setWalletError(null);
+                setWalletTab('metamask');
+                setIsWalletModalOpen(true);
+              }}
+              title="Connect Zcash Wallet (MetaMask Snap, Zashi Mobile, or Web3 Extension)"
+            >
+              <Wallet size={16} />
+              <span>{keys.length > 0 ? 'Connected Wallets' : 'Connect Wallet'}</span>
+            </button>
+
+            <button
               className="header-icon-btn"
               onClick={fetchData}
               title="Refresh live data from server"
@@ -435,14 +696,30 @@ export default function App() {
             </button>
 
             {/* User Profile / Active Monitored Wallet */}
-            <div className="user-profile-badge">
-              <div className="user-avatar-circle">ZW</div>
+            <div
+              className="user-profile-badge"
+              onClick={() => {
+                setWalletError(null);
+                setIsWalletModalOpen(true);
+              }}
+              style={{ cursor: 'pointer' }}
+              title="Click to manage or connect wallets"
+            >
+              <div className="user-avatar-circle">
+                {keys.length > 0 && keys[0].label.toLowerCase().includes('metamask')
+                  ? '🦊'
+                  : keys.length > 0 && (keys[0].label.toLowerCase().includes('mobile') || keys[0].label.toLowerCase().includes('zashi'))
+                  ? '📱'
+                  : keys.length > 0 && keys[0].label.toLowerCase().includes('extension')
+                  ? '🧩'
+                  : 'ZW'}
+              </div>
               <div className="user-info-text">
                 <span className="user-name-title">
-                  {keys.length > 0 ? keys[0].label || 'Main Testnet Wallet' : 'No Keys Active'}
+                  {keys.length > 0 ? keys[0].label || 'Main Testnet Wallet' : 'No Wallet Connected'}
                 </span>
                 <span className="user-wallet-address">
-                  {keys.length > 0 ? `${keys[0].key_string.slice(0, 10)}...${keys[0].key_string.slice(-6)}` : 'Register UFVK below'}
+                  {keys.length > 0 ? `${keys[0].key_string.slice(0, 10)}...${keys[0].key_string.slice(-6)}` : 'Click to connect wallet'}
                 </span>
               </div>
             </div>
@@ -603,6 +880,11 @@ export default function App() {
                   <div style={{ fontSize: '0.8rem', color: '#94a3b8', lineHeight: 1.4 }}>
                     Upstream: {status?.lightwalletd_url || 'https://testnet.zec.rocks:443'}
                   </div>
+                  <div className="scanner-protocol-pill" title="NU6.3 Protocol Ready (Ironwood v6 Support)">
+                    <span className="protocol-pulse-dot" />
+                    <Sparkles size={12} />
+                    <span>NU6.3 Protocol Ready</span>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: '1.25rem' }}>
@@ -720,30 +1002,31 @@ export default function App() {
                         <tr key={tx.id}>
                           {/* TxID */}
                           <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 500, color: 'var(--text-main)' }}>
-                                {tx.txid.slice(0, 10)}...{tx.txid.slice(-8)}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-main)' }}>
+                                {tx.txid.slice(0, 8)}...{tx.txid.slice(-6)}
                               </span>
                               <button
                                 className="btn btn-secondary btn-icon-only btn-sm"
+                                style={{ width: '28px', height: '28px' }}
                                 onClick={() => copyToClipboard(tx.txid, 'TxID')}
                                 title="Copy TxID"
                               >
-                                <Copy size={13} />
+                                <Copy size={12} />
                               </button>
                             </div>
                           </td>
 
                           {/* Block Height */}
                           <td>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                               #{tx.block_height}
                             </span>
                           </td>
 
                           {/* Pool & Direction Badges */}
                           <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'nowrap' }}>
                               <span className={`badge ${tx.pool === 'Ironwood' ? 'badge-ironwood' : tx.pool === 'Orchard' ? 'badge-orchard' : 'badge-sapling'}`}>
                                 {tx.pool}
                               </span>
@@ -751,12 +1034,12 @@ export default function App() {
                                 {tx.transfer_type === 'outgoing' ? 'Outward' : tx.transfer_type === 'internal' ? 'Change' : 'Inward'}
                               </span>
                               {tx.is_simulated ? (
-                                <span className="badge badge-simulated">Simulated</span>
+                                <span className="badge badge-simulated">Sim</span>
                               ) : null}
                             </div>
                           </td>
 
-                          {/* Amount with proper +/- prefix, burnt orange / green / red color, and Playfair Display font */}
+                          {/* Amount with proper +/- prefix, burnt orange / green / red color, and Manrope font */}
                           <td>
                             <div
                               className="amount-zec-val"
@@ -774,8 +1057,8 @@ export default function App() {
                           {/* Decrypted Memo */}
                           <td>
                             <div className="memo-pill-tag" title={tx.memo_text || '<Empty memo>'}>
-                              <Lock size={12} color="var(--orange-primary)" />
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
+                              <Lock size={12} color="var(--orange-primary)" style={{ flexShrink: 0 }} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '170px' }}>
                                 {tx.memo_text || '<Empty memo>'}
                               </span>
                             </div>
@@ -785,11 +1068,12 @@ export default function App() {
                           <td>
                             <button
                               className="btn btn-secondary btn-sm"
+                              style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem' }}
                               onClick={() => copyToClipboard(tx.memo_text, 'Memo')}
                               title="Copy Decrypted Memo"
                             >
-                              <Copy size={13} />
-                              <span>Copy Memo</span>
+                              <Copy size={12} />
+                              <span>Memo</span>
                             </button>
                           </td>
                         </tr>
@@ -816,138 +1100,133 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem' }}>
-              {/* Register Form */}
-              <div className="dashboard-card">
-                <div className="card-header-row">
-                  <div className="card-title-text">Register New Key</div>
+            {/* Quick Connect Banner */}
+            <div className="wallet-connect-banner">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+                <div className="banner-icon-circle">
+                  <Wallet size={20} color="var(--orange-primary)" />
                 </div>
-
-                <form onSubmit={handleRegisterKey}>
-                  <div className="form-group">
-                    <label className="form-label">Key Label / Account Name</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g., Merchant Checkout Wallet"
-                      value={newKey.label}
-                      onChange={(e) => setNewKey({ ...newKey, label: e.target.value })}
-                    />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                    Skip Manual Key Copying — Connect Your Wallet
                   </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Key Type</label>
-                    <select
-                      className="form-select"
-                      value={newKey.key_type}
-                      onChange={(e) => setNewKey({ ...newKey, key_type: e.target.value })}
-                    >
-                      <option value="UFVK">UFVK — Unified Full Viewing Key (Recommended)</option>
-                      <option value="Orchard_FVK">Orchard FVK / IVK</option>
-                      <option value="Sapling_IVK">Sapling Extended IVK (zxviews...)</option>
-                    </select>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Connect instantly with MetaMask (Zcash Snap), Zashi / Ywallet Mobile QR, or Web3 browser extension.
                   </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setIsManualKeyModalOpen(true)}
+                >
+                  <Key size={14} />
+                  <span>Manual Add</span>
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setWalletError(null);
+                    setIsWalletModalOpen(true);
+                  }}
+                >
+                  <Zap size={15} />
+                  <span>Connect Wallet</span>
+                </button>
+              </div>
+            </div>
 
-                  <div className="form-group">
-                    <label className="form-label">Key String</label>
-                    <textarea
-                      className="form-textarea"
-                      placeholder="uviewtest1... or zxviews..."
-                      value={newKey.key}
-                      onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Birth Height (Block checkpoint)</label>
-                    <input
-                      type="number"
-                      className="form-input"
-                      value={newKey.birth_height}
-                      onChange={(e) => setNewKey({ ...newKey, birth_height: e.target.value })}
-                    />
-                  </div>
-
-                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
-                    <Plus size={16} />
-                    <span>Register Key & Start Sync</span>
+            {/* Active Keys Table - 100% Display Width */}
+            <div className="table-card" style={{ width: '100%' }}>
+              <div className="card-header-row">
+                <div className="card-title-text">Active Monitored Keys ({keys.length})</div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setIsManualKeyModalOpen(true)}
+                  >
+                    <Plus size={13} color="var(--orange-primary)" />
+                    <span>Add Key</span>
                   </button>
-                </form>
-              </div>
-
-              {/* Active Keys Table */}
-              <div className="table-card">
-                <div className="card-header-row">
-                  <div className="card-title-text">Active Monitored Keys ({keys.length})</div>
                 </div>
-
-                {keys.length === 0 ? (
-                  <div className="empty-state-box">
-                    <Key size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
-                    <p>No viewing keys registered yet. Add your first UFVK above!</p>
-                  </div>
-                ) : (
-                  <div className="data-table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Label & Type</th>
-                          <th>Key String</th>
-                          <th>Birth</th>
-                          <th>Last Scanned</th>
-                          <th>Status</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {keys.map((k) => (
-                          <tr key={k.id}>
-                            <td>
-                              <div style={{ fontWeight: 600 }}>{k.label || 'Unlabeled'}</div>
-                              <span className="badge badge-orchard" style={{ fontSize: '0.68rem' }}>
-                                {k.key_type}
-                              </span>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                  {k.key_string.slice(0, 14)}...{k.key_string.slice(-8)}
-                                </span>
-                                <button
-                                  className="btn btn-secondary btn-icon-only btn-sm"
-                                  onClick={() => copyToClipboard(k.key_string, 'Viewing Key')}
-                                  title="Copy Key String"
-                                >
-                                  <Copy size={12} />
-                                </button>
-                              </div>
-                            </td>
-                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>#{k.birth_height}</td>
-                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, color: 'var(--orange-primary)' }}>
-                              #{k.last_scanned_height}
-                            </td>
-                            <td>
-                              <span className="badge badge-active">Active</span>
-                            </td>
-                            <td>
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                style={{ color: '#be123c', borderColor: '#fecdd3' }}
-                                onClick={() => handleDeleteKey(k.id)}
-                                title="Remove key"
-                              >
-                                <Trash2 size={13} />
-                                <span>Delete</span>
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
               </div>
+
+              {keys.length === 0 ? (
+                <div className="empty-state-box">
+                  <Key size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
+                  <p style={{ marginBottom: '1.25rem' }}>No viewing keys registered yet. Add your first UFVK manually or connect your wallet!</p>
+                  <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+                    <button className="btn btn-secondary" onClick={() => setIsManualKeyModalOpen(true)}>
+                      <Key size={14} />
+                      <span>Manual Add Key</span>
+                    </button>
+                    <button className="btn btn-primary" onClick={() => setIsWalletModalOpen(true)}>
+                      <Zap size={14} />
+                      <span>Connect Wallet</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="data-table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Label & Type</th>
+                        <th>Key String</th>
+                        <th>Birth</th>
+                        <th>Last Scanned</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {keys.map((k) => (
+                        <tr key={k.id}>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{k.label || 'Unlabeled'}</div>
+                            <span className="badge badge-orchard" style={{ fontSize: '0.68rem' }}>
+                              {k.key_type}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {k.key_string.slice(0, 16)}...{k.key_string.slice(-10)}
+                              </span>
+                              <button
+                                className="btn btn-secondary btn-icon-only btn-sm"
+                                style={{ width: '28px', height: '28px' }}
+                                onClick={() => copyToClipboard(k.key_string, 'Viewing Key')}
+                                title="Copy Key String"
+                              >
+                                <Copy size={12} />
+                              </button>
+                            </div>
+                          </td>
+                          <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>#{k.birth_height}</td>
+                          <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, color: 'var(--orange-primary)' }}>
+                            #{k.last_scanned_height}
+                          </td>
+                          <td>
+                            <span className="badge badge-active">Active</span>
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#be123c', borderColor: '#fecdd3', padding: '0.35rem 0.65rem' }}
+                              onClick={() => handleDeleteKey(k.id)}
+                              title="Remove key"
+                            >
+                              <Trash2 size={13} />
+                              <span>Delete</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -964,133 +1243,96 @@ export default function App() {
                   Configure HMAC-SHA256 signed event listeners for on-chain shielded note discoveries.
                 </div>
               </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => setIsWebhookModalOpen(true)}
+              >
+                <Plus size={15} />
+                <span>Register Webhook</span>
+              </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem' }}>
-              {/* Add Webhook Form */}
-              <div className="dashboard-card">
-                <div className="card-header-row">
-                  <div className="card-title-text">Register Webhook Endpoint</div>
-                </div>
+            {/* Endpoints Table - 100% Display Width */}
+            <div className="table-card" style={{ width: '100%' }}>
+              <div className="card-header-row">
+                <div className="card-title-text">Configured Endpoints ({webhooks.length})</div>
+              </div>
 
-                <form onSubmit={handleRegisterWebhook}>
-                  <div className="form-group">
-                    <label className="form-label">Target Destination URL</label>
-                    <input
-                      type="url"
-                      className="form-input"
-                      placeholder="https://api.yourdomain.com/webhooks/zcash"
-                      value={newWebhook.target_url}
-                      onChange={(e) => setNewWebhook({ ...newWebhook, target_url: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Description / Identifier</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g., Main Production Payment Listener"
-                      value={newWebhook.description}
-                      onChange={(e) => setNewWebhook({ ...newWebhook, description: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">HMAC Signing Secret (Optional)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="Auto-generated if left empty"
-                      value={newWebhook.secret}
-                      onChange={(e) => setNewWebhook({ ...newWebhook, secret: e.target.value })}
-                    />
-                  </div>
-
-                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
-                    <Plus size={16} />
-                    <span>Save Webhook Endpoint</span>
+              {webhooks.length === 0 ? (
+                <div className="empty-state-box">
+                  <Webhook size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
+                  <p style={{ marginBottom: '1.25rem' }}>No webhook endpoints registered yet. Configure your destination listener to receive live HTTP updates!</p>
+                  <button className="btn btn-primary" onClick={() => setIsWebhookModalOpen(true)}>
+                    <Plus size={15} />
+                    <span>Register First Webhook</span>
                   </button>
-                </form>
-              </div>
-
-              {/* Endpoints Table */}
-              <div className="table-card">
-                <div className="card-header-row">
-                  <div className="card-title-text">Configured Endpoints ({webhooks.length})</div>
                 </div>
-
-                {webhooks.length === 0 ? (
-                  <div className="empty-state-box">
-                    <Webhook size={32} color="var(--orange-primary)" style={{ margin: '0 auto 1rem' }} />
-                    <p>No webhook endpoints registered yet. Configure your destination listener above!</p>
-                  </div>
-                ) : (
-                  <div className="data-table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Description</th>
-                          <th>Target URL</th>
-                          <th>Secret Key</th>
-                          <th>Status</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {webhooks.map((w) => (
-                          <tr key={w.id}>
-                            <td style={{ fontWeight: 600 }}>{w.description || 'Webhook #' + w.id}</td>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: 'var(--text-main)' }}>
-                                  {w.target_url}
-                                </span>
-                                <button
-                                  className="btn btn-secondary btn-icon-only btn-sm"
-                                  onClick={() => copyToClipboard(w.target_url, 'Webhook URL')}
-                                  title="Copy URL"
-                                >
-                                  <Copy size={12} />
-                                </button>
-                              </div>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                  {w.secret.slice(0, 10)}...
-                                </span>
-                                <button
-                                  className="btn btn-secondary btn-icon-only btn-sm"
-                                  onClick={() => copyToClipboard(w.secret, 'Secret')}
-                                  title="Copy Secret"
-                                >
-                                  <Copy size={12} />
-                                </button>
-                              </div>
-                            </td>
-                            <td>
-                              <span className="badge badge-active">Active</span>
-                            </td>
-                            <td>
+              ) : (
+                <div className="data-table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Description</th>
+                        <th>Target URL</th>
+                        <th>Secret Key</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {webhooks.map((w) => (
+                        <tr key={w.id}>
+                          <td style={{ fontWeight: 600 }}>{w.description || 'Webhook #' + w.id}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                                {w.target_url}
+                              </span>
                               <button
-                                className="btn btn-secondary btn-sm"
-                                style={{ color: '#be123c', borderColor: '#fecdd3' }}
-                                onClick={() => handleDeleteWebhook(w.id)}
-                                title="Remove webhook"
+                                className="btn btn-secondary btn-icon-only btn-sm"
+                                style={{ width: '28px', height: '28px' }}
+                                onClick={() => copyToClipboard(w.target_url, 'Webhook URL')}
+                                title="Copy URL"
                               >
-                                <Trash2 size={13} />
-                                <span>Delete</span>
+                                <Copy size={12} />
                               </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                {w.secret.slice(0, 10)}...
+                              </span>
+                              <button
+                                className="btn btn-secondary btn-icon-only btn-sm"
+                                style={{ width: '28px', height: '28px' }}
+                                onClick={() => copyToClipboard(w.secret, 'Secret')}
+                                title="Copy Secret"
+                              >
+                                <Copy size={12} />
+                              </button>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="badge badge-active">Active</span>
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#be123c', borderColor: '#fecdd3', padding: '0.35rem 0.65rem' }}
+                              onClick={() => handleDeleteWebhook(w.id)}
+                              title="Remove webhook"
+                            >
+                              <Trash2 size={13} />
+                              <span>Delete</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             {/* Delivery Logs */}
@@ -1402,6 +1644,525 @@ app.post('/webhooks/zcash', (req, res) => {
           </div>
         )}
       </main>
+
+      {/* ==================================================================
+          WALLET CONNECTION MODAL (MetaMask Snap / Mobile QR / Extension / Manual)
+          ================================================================== */}
+      {isWalletModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsWalletModalOpen(false)}>
+          <div className="wallet-modal-card" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="wallet-modal-header">
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <Wallet size={20} color="var(--orange-primary)" />
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                    Connect Zcash Wallet
+                  </h2>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Grant read-only viewing permissions to index transactions. No spend authority is requested.
+                </p>
+              </div>
+              <button
+                className="wallet-modal-close-btn"
+                onClick={() => setIsWalletModalOpen(false)}
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Provider Tabs */}
+            <div className="wallet-nav-tabs">
+              <button
+                className={`wallet-nav-tab ${walletTab === 'metamask' ? 'active' : ''}`}
+                onClick={() => {
+                  setWalletTab('metamask');
+                  setWalletError(null);
+                }}
+              >
+                <span style={{ fontSize: '1.25rem' }}>🦊</span>
+                <span>MetaMask Snap</span>
+              </button>
+
+              <button
+                className={`wallet-nav-tab ${walletTab === 'mobile' ? 'active' : ''}`}
+                onClick={() => {
+                  setWalletTab('mobile');
+                  setWalletError(null);
+                  if (!mobileSession) {
+                    handleStartMobilePairing();
+                  }
+                }}
+              >
+                <Smartphone size={18} color={walletTab === 'mobile' ? 'var(--orange-primary)' : 'var(--text-muted)'} />
+                <span>Mobile Wallet</span>
+              </button>
+
+              <button
+                className={`wallet-nav-tab ${walletTab === 'extension' ? 'active' : ''}`}
+                onClick={() => {
+                  setWalletTab('extension');
+                  setWalletError(null);
+                }}
+              >
+                <Laptop size={18} color={walletTab === 'extension' ? 'var(--orange-primary)' : 'var(--text-muted)'} />
+                <span>Web3 Extension</span>
+              </button>
+
+              <button
+                className={`wallet-nav-tab ${walletTab === 'manual' ? 'active' : ''}`}
+                onClick={() => {
+                  setWalletTab('manual');
+                  setWalletError(null);
+                }}
+              >
+                <Key size={18} color={walletTab === 'manual' ? 'var(--orange-primary)' : 'var(--text-muted)'} />
+                <span>Manual UFVK</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="wallet-modal-body">
+              {walletError && (
+                <div style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--status-outward-bg)',
+                  border: '1px solid rgba(190, 18, 60, 0.2)',
+                  color: 'var(--status-outward)',
+                  fontSize: '0.82rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                  <span>{walletError}</span>
+                </div>
+              )}
+
+              {/* 1. METAMASK SNAP TAB */}
+              {walletTab === 'metamask' && (
+                <div className="wallet-provider-card">
+                  <div className="wallet-provider-icon">
+                    <span style={{ fontSize: '2rem' }}>🦊</span>
+                  </div>
+
+                  <div>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: '0 0 0.25rem 0' }}>
+                      MetaMask Zcash Snap
+                    </h3>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, maxWidth: '420px' }}>
+                      Derive and export Unified Full Viewing Keys (UFVK) directly from your MetaMask wallet using the Chainsafe Zcash Snap.
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <span className={`wallet-status-badge ${hasMetaMask ? 'ready' : 'waiting'}`}>
+                      {hasMetaMask ? '✓ MetaMask Detected' : 'MetaMask Not Detected'}
+                    </span>
+                    <span className="wallet-status-badge ready">
+                      ✓ Read-Only Permissions
+                    </span>
+                  </div>
+
+                  <div className="wallet-steps-box">
+                    <strong>How it works:</strong>
+                    <ol>
+                      <li>MetaMask will prompt to install and approve the <code>metamask-snap-zcash</code> plugin.</li>
+                      <li>It securely derives your Orchard/Sapling UFVK inside MetaMask's sandbox.</li>
+                      <li>ZecShield immediately begins background trial decryption for incoming payments.</li>
+                    </ol>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%', marginTop: '0.5rem' }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleConnectMetaMask}
+                      disabled={isConnectingWallet}
+                      style={{ width: '100%', padding: '0.75rem' }}
+                    >
+                      {isConnectingWallet ? <RefreshCw size={16} className="spin-animation" /> : <Zap size={16} />}
+                      <span>{hasMetaMask ? 'Connect via MetaMask Snap' : 'Open MetaMask Connect'}</span>
+                    </button>
+
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleSimulateMetaMaskApproval}
+                      disabled={isConnectingWallet}
+                      style={{ width: '100%', fontSize: '0.78rem' }}
+                      title="Simulates successful MetaMask Snap authorization for testnet demonstration"
+                    >
+                      <Sparkles size={14} color="var(--orange-primary)" />
+                      <span>Simulate MetaMask Authorization (Sandbox Test)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. MOBILE WALLET (ZASHI / YWALLET) TAB */}
+              {walletTab === 'mobile' && (
+                <div className="wallet-provider-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                    <span style={{ fontSize: '1.5rem' }}>📱</span>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>
+                      Scan QR with Zashi or Ywallet
+                    </h3>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Open your mobile Zcash wallet and scan the pairing QR code below.
+                  </p>
+
+                  {/* QR Canvas Frame */}
+                  <div className="wallet-qr-frame">
+                    <canvas ref={qrCanvasRef} width={210} height={210} style={{ display: 'block', borderRadius: '12px' }} />
+                    <div className="wallet-qr-radar" />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span className={`wallet-status-badge ${mobilePairStatus === 'approved' ? 'ready' : 'waiting'}`}>
+                      {mobilePairStatus === 'approved' ? (
+                        <>
+                          <Check size={14} />
+                          <span>Paired Successfully!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Radio size={14} className="spin-animation" />
+                          <span>Waiting for mobile wallet approval...</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="wallet-steps-box">
+                    <strong>Instructions:</strong>
+                    <ol>
+                      <li>Open <strong>Zashi</strong> or <strong>Ywallet</strong> on your phone.</li>
+                      <li>Go to <em>Settings</em> → <em>Export Viewing Key</em> or tap <em>Scan Companion QR</em>.</li>
+                      <li>Point your phone camera at this QR code to grant non-custodial indexer access.</li>
+                    </ol>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.6rem', width: '100%', marginTop: '0.5rem' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleStartMobilePairing}
+                      disabled={isConnectingWallet}
+                      style={{ flex: 1 }}
+                    >
+                      <RefreshCw size={14} />
+                      <span>Refresh QR</span>
+                    </button>
+
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleSimulateMobileApproval}
+                      disabled={isConnectingWallet}
+                      style={{ flex: 1.5 }}
+                      title="Simulates a mobile wallet scanning the QR and approving read-only access"
+                    >
+                      <Sparkles size={14} />
+                      <span>Simulate Mobile Scan</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 3. NATIVE EXTENSION TAB */}
+              {walletTab === 'extension' && (
+                <div className="wallet-provider-card">
+                  <div className="wallet-provider-icon">
+                    <Laptop size={28} color="var(--orange-primary)" />
+                  </div>
+
+                  <div>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: '0 0 0.25rem 0' }}>
+                      Native Zcash Web3 Extension
+                    </h3>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, maxWidth: '420px' }}>
+                      Connect using any browser extension injecting the standard <code>window.zcash</code> API (e.g., NightZola, Keplr Zcash, Zingo Web).
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <span className={`wallet-status-badge ${hasZcashExt ? 'ready' : 'alert'}`}>
+                      {hasZcashExt ? '✓ Extension Detected (window.zcash)' : 'Extension Not Detected'}
+                    </span>
+                  </div>
+
+                  <div className="wallet-steps-box">
+                    <strong>Extension Standard:</strong>
+                    <p style={{ margin: '0.35rem 0 0' }}>
+                      Compatible with emerging ZIP-321 and EIP-1193 style Zcash browser wallet providers. Invokes <code>zcash_getViewingKey</code> upon user confirmation.
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%', marginTop: '0.5rem' }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleConnectExtension}
+                      disabled={isConnectingWallet}
+                      style={{ width: '100%', padding: '0.75rem' }}
+                    >
+                      {isConnectingWallet ? <RefreshCw size={16} className="spin-animation" /> : <Zap size={16} />}
+                      <span>{hasZcashExt ? 'Connect Detected Extension' : 'Request Extension Connection'}</span>
+                    </button>
+
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleSimulateExtension}
+                      disabled={isConnectingWallet}
+                      style={{ width: '100%', fontSize: '0.78rem' }}
+                      title="Simulates native browser extension connection for sandbox environments"
+                    >
+                      <Sparkles size={14} color="var(--orange-primary)" />
+                      <span>Simulate Native Extension (Sandbox Test)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 4. MANUAL UFVK TAB */}
+              {walletTab === 'manual' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Already have your Unified Full Viewing Key (UFVK) copied? Paste it below to register immediately:
+                  </p>
+
+                  <form onSubmit={handleRegisterKey}>
+                    <div className="form-group">
+                      <label className="form-label">Key Label / Wallet Name</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="e.g., Merchant Checkout Wallet"
+                        value={newKey.label}
+                        onChange={(e) => setNewKey({ ...newKey, label: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Key String (UFVK or IVK)</label>
+                      <textarea
+                        className="form-textarea"
+                        placeholder="uviewtest1... or zxviews..."
+                        value={newKey.key}
+                        onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
+                        required
+                        rows={3}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Birth Height (Block checkpoint)</label>
+                      <input
+                        type="number"
+                        className="form-input"
+                        value={newKey.birth_height}
+                        onChange={(e) => setNewKey({ ...newKey, birth_height: e.target.value })}
+                      />
+                    </div>
+
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                      <Plus size={16} />
+                      <span>Register Key & Start Indexing</span>
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================
+          MANUAL KEY ENTRY MODAL
+          ================================================================== */}
+      {isManualKeyModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsManualKeyModalOpen(false)}>
+          <div className="app-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="app-modal-header">
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <Key size={20} color="var(--orange-primary)" />
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                    Register Viewing Key
+                  </h2>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Enter an IVK or Unified Full Viewing Key (UFVK) for non-custodial transaction trial decryption.
+                </p>
+              </div>
+              <button
+                className="wallet-modal-close-btn"
+                onClick={() => setIsManualKeyModalOpen(false)}
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="app-modal-body">
+              <form onSubmit={handleRegisterKey}>
+                <div className="form-group">
+                  <label className="form-label">Key Label / Account Name</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g., Merchant Checkout Wallet"
+                    value={newKey.label}
+                    onChange={(e) => setNewKey({ ...newKey, label: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Key Type</label>
+                  <select
+                    className="form-select"
+                    value={newKey.key_type}
+                    onChange={(e) => setNewKey({ ...newKey, key_type: e.target.value })}
+                  >
+                    <option value="UFVK">UFVK — Unified Full Viewing Key (Recommended)</option>
+                    <option value="Orchard_FVK">Orchard FVK / IVK</option>
+                    <option value="Sapling_IVK">Sapling Extended IVK (zxviews...)</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Key String</label>
+                  <textarea
+                    className="form-textarea"
+                    placeholder="uviewtest1... or zxviews..."
+                    value={newKey.key}
+                    onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
+                    required
+                    rows={4}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Birth Height (Block checkpoint)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={newKey.birth_height}
+                    onChange={(e) => setNewKey({ ...newKey, birth_height: e.target.value })}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setIsManualKeyModalOpen(false)}
+                    style={{ flex: 1 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ flex: 1 }}
+                  >
+                    <Plus size={16} />
+                    <span>Register Key</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================
+          WEBHOOK REGISTRATION MODAL
+          ================================================================== */}
+      {isWebhookModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsWebhookModalOpen(false)}>
+          <div className="app-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="app-modal-header">
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <Webhook size={20} color="var(--orange-primary)" />
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                    Register Webhook Endpoint
+                  </h2>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Configure an HTTP destination URL to receive instant HMAC-SHA256 signed note notifications.
+                </p>
+              </div>
+              <button
+                className="wallet-modal-close-btn"
+                onClick={() => setIsWebhookModalOpen(false)}
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="app-modal-body">
+              <form onSubmit={handleRegisterWebhook}>
+                <div className="form-group">
+                  <label className="form-label">Target Destination URL</label>
+                  <input
+                    type="url"
+                    className="form-input"
+                    placeholder="https://api.yourdomain.com/webhooks/zcash"
+                    value={newWebhook.target_url}
+                    onChange={(e) => setNewWebhook({ ...newWebhook, target_url: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Description / Identifier</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g., Main Production Payment Listener"
+                    value={newWebhook.description}
+                    onChange={(e) => setNewWebhook({ ...newWebhook, description: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">HMAC Signing Secret (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Auto-generated if left empty"
+                    value={newWebhook.secret}
+                    onChange={(e) => setNewWebhook({ ...newWebhook, secret: e.target.value })}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setIsWebhookModalOpen(false)}
+                    style={{ flex: 1 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ flex: 1 }}
+                  >
+                    <Plus size={16} />
+                    <span>Save Endpoint</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Floating Toast Notification */}
       {actionMessage && (
