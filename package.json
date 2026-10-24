@@ -4,7 +4,7 @@
   "description": "Developer-first Shielded Indexer & Webhook Gateway for Zcash",
   "main": "src/index.ts",
   "scripts": {
-    "start": "tsx src/index.ts",
+    "start": "node --import tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "dev:dashboard": "npm --prefix dashboard run dev",
     "build:dashboard": "npm --prefix dashboard install --include=dev && npm --prefix dashboard run build",
