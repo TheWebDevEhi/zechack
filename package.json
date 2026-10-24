@@ -7,7 +7,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "dev:dashboard": "npm --prefix dashboard run dev",
-    "build:dashboard": "npm --prefix dashboard run build",
+    "build:dashboard": "npm --prefix dashboard install && npm --prefix dashboard run build",
     "build": "npm run build:dashboard",
     "db:reset": "tsx scripts/reset-db.ts",
     "test:api": "tsx scripts/test-api.ts",

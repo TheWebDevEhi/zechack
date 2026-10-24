@@ -13,7 +13,8 @@
     "lucide-react": "^1.59.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "zecshield": "file:.."
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
