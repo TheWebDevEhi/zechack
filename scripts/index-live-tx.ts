@@ -18,7 +18,7 @@ async function main() {
   console.log(`  Amount: ${amountZec} TAZ (${amountZat} zat)`);
   console.log(`  Pool: Ironwood (NU6.3 / NU7)`);
 
-  const saved = dbService.addShieldedNote({
+  const saved = await dbService.addShieldedNote({
     key_id: keyId,
     txid,
     block_height: blockHeight,
@@ -33,7 +33,7 @@ async function main() {
 
   if (!saved) {
     console.log('[Indexer] Note already exists in database or could not be inserted.');
-    const existing = dbService.getNoteByTxid(txid);
+    const existing = await dbService.getNoteByTxid(txid);
     if (existing) {
       console.log('[Indexer] Found existing note ID:', existing.id);
       console.log('[Indexer] Dispatching webhook...');
@@ -46,17 +46,20 @@ async function main() {
   }
 
   // Update last scanned height to chain tip so it stays fresh
-  dbService.updateLastScannedHeight(keyId, 4526745);
+  await dbService.updateLastScannedHeight(keyId, 4526745);
 
   console.log('\n[Indexer] Inspection of DB Notes:');
-  const allNotes = dbService.getShieldedNotes();
+  const allNotes = await dbService.getShieldedNotes();
   console.log(JSON.stringify(allNotes, null, 2));
 
   console.log('\n[Indexer] Inspection of Webhook Deliveries:');
-  const deliveries = dbService.getWebhookDeliveries();
+  const deliveries = await dbService.getWebhookDeliveries();
   console.log(JSON.stringify(deliveries, null, 2));
 
   process.exit(0);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error('[Indexer] Fatal error:', err);
+  process.exit(1);
+});

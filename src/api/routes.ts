@@ -9,27 +9,32 @@ import { config } from '../config.js';
 export const apiRouter = Router();
 
 // --- Status & Health ---
-apiRouter.get('/status', (req: Request, res: Response) => {
-  const stats = dbService.getStats();
-  const chainTip = chainSyncer.getLatestTip();
+apiRouter.get('/status', async (req: Request, res: Response) => {
+  try {
+    const stats = await dbService.getStats();
+    const chainTip = chainSyncer.getLatestTip();
 
-  res.json({
-    status: 'ok',
-    network: config.network,
-    lightwalletd_url: config.lightwalletdUrl,
-    chain_tip: chainTip,
-    stats: {
-      total_keys_monitored: stats.totalKeys,
-      total_notes_indexed: stats.totalNotes,
-      total_shielded_zat: stats.totalZat,
-      total_shielded_zec: (stats.totalZat / 100_000_000).toFixed(8)
-    },
-    timestamp: Math.floor(Date.now() / 1000)
-  });
+    res.json({
+      status: 'ok',
+      network: config.network,
+      lightwalletd_url: config.lightwalletdUrl,
+      database_mode: dbService.getMode(),
+      chain_tip: chainTip,
+      stats: {
+        total_keys_monitored: stats.totalKeys,
+        total_notes_indexed: stats.totalNotes,
+        total_shielded_zat: stats.totalZat,
+        total_shielded_zec: (stats.totalZat / 100_000_000).toFixed(8)
+      },
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Viewing Keys Management ---
-apiRouter.post('/keys', (req: Request, res: Response) => {
+apiRouter.post('/keys', async (req: Request, res: Response) => {
   try {
     const { key, label, birth_height, key_type } = req.body;
     if (!key || typeof key !== 'string') {
@@ -37,7 +42,7 @@ apiRouter.post('/keys', (req: Request, res: Response) => {
     }
 
     const trimmedKey = key.trim();
-    const existing = dbService.getViewingKeyByString(trimmedKey);
+    const existing = await dbService.getViewingKeyByString(trimmedKey);
     if (existing) {
       return res.status(200).json({ message: 'Viewing key already registered', key: existing });
     }
@@ -45,7 +50,7 @@ apiRouter.post('/keys', (req: Request, res: Response) => {
     const determinedType = key_type || (trimmedKey.startsWith('uview') ? 'UFVK' : 'ViewingKey');
     const birthHeight = parseInt(birth_height, 10) || 0;
 
-    const record = dbService.addViewingKey(
+    const record = await dbService.addViewingKey(
       trimmedKey,
       determinedType,
       label || 'Default Key',
@@ -58,9 +63,9 @@ apiRouter.post('/keys', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/keys', (req: Request, res: Response) => {
+apiRouter.get('/keys', async (req: Request, res: Response) => {
   try {
-    const keys = dbService.getViewingKeys(false);
+    const keys = await dbService.getViewingKeys(false);
     const chainTip = chainSyncer.getLatestTip();
 
     const enriched = keys.map((k) => ({
@@ -78,13 +83,13 @@ apiRouter.get('/keys', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.delete('/keys/:id', (req: Request, res: Response) => {
+apiRouter.delete('/keys/:id', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
-    const deleted = dbService.deleteViewingKey(id);
+    const deleted = await dbService.deleteViewingKey(id);
     if (!deleted) {
       return res.status(404).json({ error: 'Viewing key not found' });
     }
@@ -93,13 +98,14 @@ apiRouter.delete('/keys/:id', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
-apiRouter.delete('/viewing-keys/:id', (req: Request, res: Response) => {
+
+apiRouter.delete('/viewing-keys/:id', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
-    const deleted = dbService.deleteViewingKey(id);
+    const deleted = await dbService.deleteViewingKey(id);
     if (!deleted) {
       return res.status(404).json({ error: 'Viewing key not found' });
     }
@@ -110,22 +116,22 @@ apiRouter.delete('/viewing-keys/:id', (req: Request, res: Response) => {
 });
 
 // --- Transactions & Shielded Notes ---
-apiRouter.get('/transactions', (req: Request, res: Response) => {
+apiRouter.get('/transactions', async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string, 10) || 50;
     const keyId = req.query.key_id ? parseInt(req.query.key_id as string, 10) : undefined;
 
-    const notes = dbService.getShieldedNotes(limit, keyId);
+    const notes = await dbService.getShieldedNotes(limit, keyId);
     res.json({ count: notes.length, transactions: notes });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-apiRouter.get('/transactions/:txid', (req: Request, res: Response) => {
+apiRouter.get('/transactions/:txid', async (req: Request, res: Response) => {
   try {
     const txid = String(req.params.txid);
-    const note = dbService.getNoteByTxid(txid);
+    const note = await dbService.getNoteByTxid(txid);
     if (!note) {
       return res.status(404).json({ error: 'Transaction not found in indexed records' });
     }
@@ -146,7 +152,7 @@ apiRouter.post('/transactions/index-confirmed', async (req: Request, res: Respon
     const amount = parseFloat(amount_zec) || 0.00001;
     const zat = Math.round(amount * 100_000_000);
 
-    const note = dbService.addShieldedNote({
+    const note = await dbService.addShieldedNote({
       key_id: keyId,
       txid: String(txid),
       block_height: parseInt(block_height, 10) || 4523503,
@@ -173,7 +179,7 @@ apiRouter.post('/transactions/index-confirmed', async (req: Request, res: Respon
 });
 
 // --- Webhooks Management ---
-apiRouter.post('/webhooks', (req: Request, res: Response) => {
+apiRouter.post('/webhooks', async (req: Request, res: Response) => {
   try {
     const { target_url, secret, description } = req.body;
     if (!target_url || typeof target_url !== 'string') {
@@ -181,7 +187,7 @@ apiRouter.post('/webhooks', (req: Request, res: Response) => {
     }
 
     const signingSecret = secret || crypto.randomBytes(24).toString('hex');
-    const webhook = dbService.addWebhook(target_url.trim(), signingSecret, description || '');
+    const webhook = await dbService.addWebhook(target_url.trim(), signingSecret, description || '');
 
     res.status(201).json({
       message: 'Webhook registered successfully',
@@ -193,22 +199,22 @@ apiRouter.post('/webhooks', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/webhooks', (req: Request, res: Response) => {
+apiRouter.get('/webhooks', async (req: Request, res: Response) => {
   try {
-    const webhooks = dbService.getActiveWebhooks();
+    const webhooks = await dbService.getActiveWebhooks();
     res.json({ webhooks });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-apiRouter.delete('/webhooks/:id', (req: Request, res: Response) => {
+apiRouter.delete('/webhooks/:id', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid webhook ID' });
     }
-    const deleted = dbService.deleteWebhook(id);
+    const deleted = await dbService.deleteWebhook(id);
     if (!deleted) {
       return res.status(404).json({ error: 'Webhook not found' });
     }
@@ -218,10 +224,10 @@ apiRouter.delete('/webhooks/:id', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/webhooks/deliveries', (req: Request, res: Response) => {
+apiRouter.get('/webhooks/deliveries', async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string, 10) || 50;
-    const deliveries = dbService.getWebhookDeliveries(limit);
+    const deliveries = await dbService.getWebhookDeliveries(limit);
     res.json({ count: deliveries.length, deliveries });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -319,7 +325,7 @@ apiRouter.get('/wallet-pair/session/:id', (req: Request, res: Response) => {
 });
 
 // 3. Approve wallet pairing (from mobile companion or scanner)
-apiRouter.post('/wallet-pair/session/:id/approve', (req: Request, res: Response) => {
+apiRouter.post('/wallet-pair/session/:id/approve', async (req: Request, res: Response) => {
   cleanupSessions();
   const id = req.params.id as string;
   const session = pairSessions.get(id);
@@ -334,13 +340,13 @@ apiRouter.post('/wallet-pair/session/:id/approve', (req: Request, res: Response)
   }
 
   const trimmedKey = key.trim();
-  let existing = dbService.getViewingKeyByString(trimmedKey);
+  let existing = await dbService.getViewingKeyByString(trimmedKey);
   let record = existing;
 
   if (!record) {
     const determinedType = key_type || (trimmedKey.startsWith('uview') ? 'UFVK' : 'ViewingKey');
     const birthHeight = parseInt(birth_height, 10) || 0;
-    record = dbService.addViewingKey(
+    record = await dbService.addViewingKey(
       trimmedKey,
       determinedType,
       label || 'Connected Mobile Wallet',
@@ -358,10 +364,10 @@ apiRouter.post('/wallet-pair/session/:id/approve', (req: Request, res: Response)
 });
 
 // --- System & Database Reset ---
-apiRouter.post('/system/reset', (req: Request, res: Response) => {
+apiRouter.post('/system/reset', async (req: Request, res: Response) => {
   try {
     const keepKeys = req.body?.keep_keys === true;
-    dbService.resetDatabase({ keepKeys });
+    await dbService.resetDatabase({ keepKeys });
     res.json({
       message: keepKeys
         ? 'Shielded notes and webhook deliveries cleared. Monitored keys retained.'

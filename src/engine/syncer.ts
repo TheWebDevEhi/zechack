@@ -55,7 +55,7 @@ export class ChainSyncer {
       return;
     }
 
-    const activeKeys = dbService.getViewingKeys(true);
+    const activeKeys = await dbService.getViewingKeys(true);
     if (!activeKeys.length) {
       return;
     }
@@ -109,7 +109,7 @@ export class ChainSyncer {
           const ironwoodNotes = (tx as any).ironwoodNotes;
           if (ironwoodNotes && ironwoodNotes.length > 0) {
             for (const note of ironwoodNotes) {
-              const saved = dbService.addShieldedNote({
+              const saved = await dbService.addShieldedNote({
                 key_id: key.id,
                 txid: tx.txid,
                 block_height: tx.blockHeight,
@@ -131,7 +131,7 @@ export class ChainSyncer {
           // Process Orchard Notes
           if (tx.orchardNotes && tx.orchardNotes.length > 0) {
             for (const note of tx.orchardNotes) {
-              const saved = dbService.addShieldedNote({
+              const saved = await dbService.addShieldedNote({
                 key_id: key.id,
                 txid: tx.txid,
                 block_height: tx.blockHeight,
@@ -153,7 +153,7 @@ export class ChainSyncer {
           // Process Sapling Notes
           if (tx.saplingNotes && tx.saplingNotes.length > 0) {
             for (const note of tx.saplingNotes) {
-              const saved = dbService.addShieldedNote({
+              const saved = await dbService.addShieldedNote({
                 key_id: key.id,
                 txid: tx.txid,
                 block_height: tx.blockHeight,
@@ -174,13 +174,13 @@ export class ChainSyncer {
         }
 
         // Update checkpoint after each successful batch
-        dbService.updateLastScannedHeight(key.id, endHeight);
+        await dbService.updateLastScannedHeight(key.id, endHeight);
         startHeight = endHeight + 1;
       } catch (err: any) {
         console.error(`[Syncer] Scan error for key #${key.id} in range ${startHeight}-${endHeight}:`, err.message);
         // Advance slightly so syncer is not stuck forever, then wait for next cycle
         const nextCheckpoint = Math.min(chainTip, endHeight);
-        dbService.updateLastScannedHeight(key.id, nextCheckpoint);
+        await dbService.updateLastScannedHeight(key.id, nextCheckpoint);
         break;
       }
     }

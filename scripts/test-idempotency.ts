@@ -3,7 +3,7 @@ import { dbService } from '../src/db/database';
 async function main() {
   await dbService.init();
 
-  const key = dbService.addViewingKey('test-key-idempotency', 'UFVK', 'Idempotency Test Key', 4528000);
+  const key = await dbService.addViewingKey('test-key-idempotency', 'UFVK', 'Idempotency Test Key', 4528000);
 
   const sampleNote = {
     key_id: key.id,
@@ -19,17 +19,17 @@ async function main() {
   };
 
   // First insertion
-  const first = dbService.addShieldedNote(sampleNote);
+  const first = await dbService.addShieldedNote(sampleNote);
   console.log('First note insertion result:', first ? `Note ID #${first.id}` : 'NULL');
   if (!first) throw new Error('First insertion should have succeeded');
 
   // Second duplicate insertion
-  const second = dbService.addShieldedNote(sampleNote);
+  const second = await dbService.addShieldedNote(sampleNote);
   console.log('Second duplicate insertion result:', second ? `DUPLICATE ID #${second.id}` : 'NULL (IGNORED AS EXPECTED)');
   if (second !== null) throw new Error('Duplicate insertion should have returned null');
 
   // Clean up
-  dbService.resetDatabase({ keepKeys: false });
+  await dbService.resetDatabase({ keepKeys: false });
   console.log('Idempotency test PASSED with 100% success!');
 }
 

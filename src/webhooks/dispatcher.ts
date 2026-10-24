@@ -15,7 +15,7 @@ export class WebhookDispatcher {
       return;
     }
 
-    const activeWebhooks = dbService.getActiveWebhooks();
+    const activeWebhooks = await dbService.getActiveWebhooks();
     if (!activeWebhooks.length) {
       return;
     }
@@ -42,7 +42,7 @@ export class WebhookDispatcher {
 
     for (const webhook of activeWebhooks) {
       // 2. Prevent duplicate delivery if this transaction or note was already delivered to this endpoint
-      if (dbService.hasDeliveredTxid(webhook.id, note.txid) || dbService.hasSuccessfulDelivery(webhook.id, note.id)) {
+      if ((await dbService.hasDeliveredTxid(webhook.id, note.txid)) || (await dbService.hasSuccessfulDelivery(webhook.id, note.id))) {
         console.log(`[Webhook] Transaction ${note.txid} (note #${note.id}) was already successfully delivered to webhook #${webhook.id}. Skipping duplicate.`);
         continue;
       }
@@ -81,7 +81,7 @@ export class WebhookDispatcher {
         });
 
         const responseText = await response.text().catch(() => '');
-        dbService.logWebhookDelivery(
+        await dbService.logWebhookDelivery(
           webhook.id,
           noteId,
           payloadJson,
@@ -97,7 +97,7 @@ export class WebhookDispatcher {
         }
       } catch (err: any) {
         console.warn(`[Webhook] Delivery attempt ${attempt} failed for ${webhook.target_url}: ${err.message}`);
-        dbService.logWebhookDelivery(
+        await dbService.logWebhookDelivery(
           webhook.id,
           noteId,
           payloadJson,

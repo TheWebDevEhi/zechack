@@ -19,7 +19,7 @@ export class PaymentSimulator {
    * and triggers the webhook dispatcher.
    */
   public static async simulatePayment(options: SimulatePaymentOptions): Promise<ShieldedNoteRecord> {
-    const activeKeys = dbService.getViewingKeys(true);
+    const activeKeys = await dbService.getViewingKeys(true);
     let targetKeyId = options.keyId;
 
     if (!targetKeyId) {
@@ -28,7 +28,7 @@ export class PaymentSimulator {
       } else {
         // Create a default test viewing key if none exists
         const dummyUfvk = 'uviewtest1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
-        const created = dbService.addViewingKey(dummyUfvk, 'UFVK', 'Demo Simulation Key', 4500000);
+        const created = await dbService.addViewingKey(dummyUfvk, 'UFVK', 'Demo Simulation Key', 4500000);
         targetKeyId = created.id;
       }
     }
@@ -39,10 +39,10 @@ export class PaymentSimulator {
     const amountZat = Math.round(amountZec * 100_000_000);
 
     // Get an approximate block height from existing records or default
-    const existing = dbService.getShieldedNotes(1);
+    const existing = await dbService.getShieldedNotes(1);
     const blockHeight = options.blockHeight || (existing.length > 0 ? existing[0].block_height + 1 : 4520000);
 
-    const noteRecord = dbService.addShieldedNote({
+    const noteRecord = await dbService.addShieldedNote({
       key_id: targetKeyId,
       txid,
       block_height: blockHeight,

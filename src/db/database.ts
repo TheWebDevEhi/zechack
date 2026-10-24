@@ -1,4 +1,4 @@
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import { createClient, Client } from '@libsql/client';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
@@ -49,42 +49,48 @@ export interface WebhookDeliveryRecord {
 }
 
 export class DatabaseService {
-  private db: SqlJsDatabase | null = null;
+  private client: Client | null = null;
   private dbPath: string;
+  private mode: 'turso' | 'local' = 'local';
 
   constructor(dbPath: string = config.dbPath) {
     this.dbPath = dbPath;
   }
 
+  public getMode(): 'turso' | 'local' {
+    return this.mode;
+  }
+
   public async init(): Promise<void> {
-    const SQL = await initSqlJs();
-    const dir = path.dirname(this.dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    if (fs.existsSync(this.dbPath)) {
-      const fileBuffer = fs.readFileSync(this.dbPath);
-      this.db = new SQL.Database(fileBuffer);
+    if (config.tursoDatabaseUrl) {
+      this.mode = 'turso';
+      console.log(`[DB] Initializing hybrid database in TURSO cloud mode...`);
+      console.log(`[DB] Turso URL: ${config.tursoDatabaseUrl}`);
+      this.client = createClient({
+        url: config.tursoDatabaseUrl,
+        authToken: config.tursoAuthToken,
+      });
     } else {
-      this.db = new SQL.Database();
-      this.save();
+      this.mode = 'local';
+      const dir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const normalizedPath = path.resolve(this.dbPath).replace(/\\/g, '/');
+      console.log(`[DB] Initializing hybrid database in LOCAL file mode...`);
+      console.log(`[DB] Database file: ${normalizedPath}`);
+      this.client = createClient({
+        url: `file:${normalizedPath}`,
+      });
     }
 
-    this.createTables();
+    await this.createTables();
   }
 
-  private save(): void {
-    if (!this.db) return;
-    const data = this.db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
-  }
+  private async createTables(): Promise<void> {
+    if (!this.client) throw new Error('Database not initialized');
 
-  private createTables(): void {
-    if (!this.db) throw new Error('Database not initialized');
-
-    this.db.run(`
+    await this.client.executeMultiple(`
       CREATE TABLE IF NOT EXISTS viewing_keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key_string TEXT UNIQUE NOT NULL,
@@ -131,150 +137,133 @@ export class DatabaseService {
         delivered_at INTEGER NOT NULL
       );
     `);
-    this.save();
   }
 
   // --- Viewing Keys ---
-  public addViewingKey(
+  public async addViewingKey(
     keyString: string,
     keyType: string,
     label: string,
     birthHeight: number
-  ): ViewingKeyRecord {
-    if (!this.db) throw new Error('Database not initialized');
+  ): Promise<ViewingKeyRecord> {
+    if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
 
-    const stmt = this.db.prepare(
-      `INSERT INTO viewing_keys (key_string, key_type, label, birth_height, last_scanned_height, is_active, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`
-    );
-    stmt.run([keyString, keyType, label, birthHeight, birthHeight, now]);
-    stmt.free();
-    this.save();
+    await this.client.execute({
+      sql: `INSERT INTO viewing_keys (key_string, key_type, label, birth_height, last_scanned_height, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      args: [keyString, keyType, label, birthHeight, birthHeight, now]
+    });
 
-    return this.getViewingKeyByString(keyString)!;
+    const created = await this.getViewingKeyByString(keyString);
+    if (!created) throw new Error('Failed to retrieve newly added viewing key');
+    return created;
   }
 
-  public getViewingKeys(onlyActive: boolean = true): ViewingKeyRecord[] {
-    if (!this.db) throw new Error('Database not initialized');
+  public async getViewingKeys(onlyActive: boolean = true): Promise<ViewingKeyRecord[]> {
+    if (!this.client) throw new Error('Database not initialized');
     const query = onlyActive
       ? 'SELECT * FROM viewing_keys WHERE is_active = 1 ORDER BY id DESC'
       : 'SELECT * FROM viewing_keys ORDER BY id DESC';
 
-    const res = this.db.exec(query);
-    if (!res.length) return [];
+    const res = await this.client.execute(query);
+    return res.rows as unknown as ViewingKeyRecord[];
+  }
 
-    const columns = res[0].columns;
-    return res[0].values.map((row) => {
-      const obj: any = {};
-      columns.forEach((col, idx) => (obj[col] = row[idx]));
-      return obj as ViewingKeyRecord;
+  public async getViewingKeyById(id: number): Promise<ViewingKeyRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM viewing_keys WHERE id = ? LIMIT 1',
+      args: [id]
+    });
+    if (res.rows.length === 0) return null;
+    return res.rows[0] as unknown as ViewingKeyRecord;
+  }
+
+  public async getViewingKeyByString(keyString: string): Promise<ViewingKeyRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM viewing_keys WHERE key_string = ? LIMIT 1',
+      args: [keyString]
+    });
+    if (res.rows.length === 0) return null;
+    return res.rows[0] as unknown as ViewingKeyRecord;
+  }
+
+  public async updateLastScannedHeight(keyId: number, height: number): Promise<void> {
+    if (!this.client) throw new Error('Database not initialized');
+    await this.client.execute({
+      sql: 'UPDATE viewing_keys SET last_scanned_height = ? WHERE id = ?',
+      args: [height, keyId]
     });
   }
 
-  public getViewingKeyById(id: number): ViewingKeyRecord | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('SELECT * FROM viewing_keys WHERE id = ?');
-    stmt.bind([id]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as ViewingKeyRecord;
-      stmt.free();
-      return row;
-    }
-    stmt.free();
-    return null;
-  }
-
-  public getViewingKeyByString(keyString: string): ViewingKeyRecord | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('SELECT * FROM viewing_keys WHERE key_string = ?');
-    stmt.bind([keyString]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as ViewingKeyRecord;
-      stmt.free();
-      return row;
-    }
-    stmt.free();
-    return null;
-  }
-
-  public updateLastScannedHeight(keyId: number, height: number): void {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('UPDATE viewing_keys SET last_scanned_height = ? WHERE id = ?');
-    stmt.run([height, keyId]);
-    stmt.free();
-    this.save();
-  }
-
-  public deleteViewingKey(id: number): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const checkStmt = this.db.prepare('SELECT id FROM viewing_keys WHERE id = ?');
-    checkStmt.bind([id]);
-    const exists = checkStmt.step();
-    checkStmt.free();
-    if (!exists) return false;
+  public async deleteViewingKey(id: number): Promise<boolean> {
+    if (!this.client) throw new Error('Database not initialized');
+    const checkRes = await this.client.execute({
+      sql: 'SELECT id FROM viewing_keys WHERE id = ? LIMIT 1',
+      args: [id]
+    });
+    if (checkRes.rows.length === 0) return false;
 
     // Delete associated notes and viewing key
-    const notesStmt = this.db.prepare('DELETE FROM shielded_notes WHERE key_id = ?');
-    notesStmt.run([id]);
-    notesStmt.free();
+    await this.client.execute({
+      sql: 'DELETE FROM shielded_notes WHERE key_id = ?',
+      args: [id]
+    });
+    await this.client.execute({
+      sql: 'DELETE FROM viewing_keys WHERE id = ?',
+      args: [id]
+    });
 
-    const delStmt = this.db.prepare('DELETE FROM viewing_keys WHERE id = ?');
-    delStmt.run([id]);
-    delStmt.free();
-
-    this.save();
     return true;
   }
 
   // --- Shielded Notes ---
-  public addShieldedNote(note: Omit<ShieldedNoteRecord, 'id' | 'created_at'>): ShieldedNoteRecord | null {
-    if (!this.db) throw new Error('Database not initialized');
+  public async addShieldedNote(note: Omit<ShieldedNoteRecord, 'id' | 'created_at'>): Promise<ShieldedNoteRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
 
-    const stmt = this.db.prepare(`
-      INSERT OR IGNORE INTO shielded_notes 
-      (key_id, txid, block_height, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run([
-      note.key_id,
-      note.txid,
-      note.block_height,
-      note.block_time,
-      note.pool,
-      note.amount_zat,
-      note.amount_zec,
-      note.transfer_type,
-      note.memo_text || '',
-      note.is_simulated || 0,
-      now
-    ]);
-    stmt.free();
+    const insertRes = await this.client.execute({
+      sql: `
+        INSERT OR IGNORE INTO shielded_notes 
+        (key_id, txid, block_height, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      args: [
+        note.key_id,
+        note.txid,
+        note.block_height,
+        note.block_time,
+        note.pool,
+        note.amount_zat,
+        note.amount_zec,
+        note.transfer_type,
+        note.memo_text || '',
+        note.is_simulated || 0,
+        now
+      ]
+    });
 
-    // Check if a row was actually inserted
-    const rowsModified = this.db.getRowsModified();
-    if (rowsModified === 0) {
+    if (insertRes.rowsAffected === 0) {
       // Note was already indexed; return null so callers do not dispatch duplicate webhooks
       return null;
     }
 
-    this.save();
-
     // Query back the newly inserted note
-    const q = this.db.prepare('SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ? AND amount_zat = ?');
-    q.bind([note.key_id, note.txid, note.pool, note.amount_zat]);
-    if (q.step()) {
-      const res = q.getAsObject() as unknown as ShieldedNoteRecord;
-      q.free();
-      return res;
+    const q = await this.client.execute({
+      sql: 'SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ? AND amount_zat = ? LIMIT 1',
+      args: [note.key_id, note.txid, note.pool, note.amount_zat]
+    });
+
+    if (q.rows.length > 0) {
+      return q.rows[0] as unknown as ShieldedNoteRecord;
     }
-    q.free();
     return null;
   }
 
-  public getShieldedNotes(limit: number = 50, keyId?: number): ShieldedNoteRecord[] {
-    if (!this.db) throw new Error('Database not initialized');
+  public async getShieldedNotes(limit: number = 50, keyId?: number): Promise<ShieldedNoteRecord[]> {
+    if (!this.client) throw new Error('Database not initialized');
     let query = 'SELECT * FROM shielded_notes';
     const params: any[] = [];
 
@@ -285,160 +274,142 @@ export class DatabaseService {
     query += ' ORDER BY block_height DESC, id DESC LIMIT ?';
     params.push(limit);
 
-    const stmt = this.db.prepare(query);
-    stmt.bind(params);
-    const results: ShieldedNoteRecord[] = [];
-    while (stmt.step()) {
-      results.push(stmt.getAsObject() as unknown as ShieldedNoteRecord);
-    }
-    stmt.free();
-    return results;
+    const res = await this.client.execute({
+      sql: query,
+      args: params
+    });
+    return res.rows as unknown as ShieldedNoteRecord[];
   }
 
-  public getNoteByTxid(txid: string): ShieldedNoteRecord | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('SELECT * FROM shielded_notes WHERE txid = ? LIMIT 1');
-    stmt.bind([txid]);
-    if (stmt.step()) {
-      const res = stmt.getAsObject() as unknown as ShieldedNoteRecord;
-      stmt.free();
-      return res;
-    }
-    stmt.free();
-    return null;
+  public async getNoteByTxid(txid: string): Promise<ShieldedNoteRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM shielded_notes WHERE txid = ? LIMIT 1',
+      args: [txid]
+    });
+    if (res.rows.length === 0) return null;
+    return res.rows[0] as unknown as ShieldedNoteRecord;
   }
 
   // --- Webhooks ---
-  public addWebhook(targetUrl: string, secret: string, description: string = ''): WebhookRecord {
-    if (!this.db) throw new Error('Database not initialized');
+  public async addWebhook(targetUrl: string, secret: string, description: string = ''): Promise<WebhookRecord> {
+    if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
-    const stmt = this.db.prepare(
-      'INSERT INTO webhooks (target_url, secret, description, is_active, created_at) VALUES (?, ?, ?, 1, ?)'
-    );
-    stmt.run([targetUrl, secret, description, now]);
-    stmt.free();
-    this.save();
+    await this.client.execute({
+      sql: 'INSERT INTO webhooks (target_url, secret, description, is_active, created_at) VALUES (?, ?, ?, 1, ?)',
+      args: [targetUrl, secret, description, now]
+    });
 
-    const q = this.db.prepare('SELECT * FROM webhooks WHERE target_url = ? ORDER BY id DESC LIMIT 1');
-    q.bind([targetUrl]);
-    q.step();
-    const res = q.getAsObject() as unknown as WebhookRecord;
-    q.free();
-    return res;
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM webhooks WHERE target_url = ? ORDER BY id DESC LIMIT 1',
+      args: [targetUrl]
+    });
+    return res.rows[0] as unknown as WebhookRecord;
   }
 
-  public getActiveWebhooks(): WebhookRecord[] {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('SELECT * FROM webhooks WHERE is_active = 1');
-    const list: WebhookRecord[] = [];
-    while (stmt.step()) {
-      list.push(stmt.getAsObject() as unknown as WebhookRecord);
-    }
-    stmt.free();
-    return list;
+  public async getActiveWebhooks(): Promise<WebhookRecord[]> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute('SELECT * FROM webhooks WHERE is_active = 1');
+    return res.rows as unknown as WebhookRecord[];
   }
 
-  public logWebhookDelivery(
+  public async logWebhookDelivery(
     webhookId: number,
     noteId: number,
     payload: string,
     statusCode: number,
     responseBody: string
-  ): void {
-    if (!this.db) throw new Error('Database not initialized');
+  ): Promise<void> {
+    if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
-    const stmt = this.db.prepare(`
-      INSERT INTO webhook_deliveries (webhook_id, note_id, payload, status_code, response_body, delivered_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run([webhookId, noteId, payload, statusCode, responseBody, now]);
-    stmt.free();
-    this.save();
+    await this.client.execute({
+      sql: `INSERT INTO webhook_deliveries (webhook_id, note_id, payload, status_code, response_body, delivered_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [webhookId, noteId, payload, statusCode, responseBody, now]
+    });
   }
 
-  public getWebhookDeliveries(limit: number = 50): WebhookDeliveryRecord[] {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare('SELECT * FROM webhook_deliveries ORDER BY id DESC LIMIT ?');
-    stmt.bind([limit]);
-    const list: WebhookDeliveryRecord[] = [];
-    while (stmt.step()) {
-      list.push(stmt.getAsObject() as unknown as WebhookDeliveryRecord);
-    }
-    stmt.free();
-    return list;
+  public async getWebhookDeliveries(limit: number = 50): Promise<WebhookDeliveryRecord[]> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM webhook_deliveries ORDER BY id DESC LIMIT ?',
+      args: [limit]
+    });
+    return res.rows as unknown as WebhookDeliveryRecord[];
   }
 
-  public hasSuccessfulDelivery(webhookId: number, noteId: number): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare(`
-      SELECT id FROM webhook_deliveries 
-      WHERE webhook_id = ? AND note_id = ? AND status_code >= 200 AND status_code < 300 
-      LIMIT 1
-    `);
-    stmt.bind([webhookId, noteId]);
-    const exists = stmt.step();
-    stmt.free();
-    return exists;
+  public async hasSuccessfulDelivery(webhookId: number, noteId: number): Promise<boolean> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: `SELECT id FROM webhook_deliveries 
+            WHERE webhook_id = ? AND note_id = ? AND status_code >= 200 AND status_code < 300 
+            LIMIT 1`,
+      args: [webhookId, noteId]
+    });
+    return res.rows.length > 0;
   }
 
-  public hasDeliveredTxid(webhookId: number, txid: string): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare(`
-      SELECT wd.id FROM webhook_deliveries wd 
-      JOIN shielded_notes sn ON wd.note_id = sn.id 
-      WHERE wd.webhook_id = ? AND sn.txid = ? AND wd.status_code >= 200 AND wd.status_code < 300 
-      LIMIT 1
-    `);
-    stmt.bind([webhookId, txid]);
-    const exists = stmt.step();
-    stmt.free();
-    return exists;
+  public async hasDeliveredTxid(webhookId: number, txid: string): Promise<boolean> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: `SELECT wd.id FROM webhook_deliveries wd 
+            JOIN shielded_notes sn ON wd.note_id = sn.id 
+            WHERE wd.webhook_id = ? AND sn.txid = ? AND wd.status_code >= 200 AND wd.status_code < 300 
+            LIMIT 1`,
+      args: [webhookId, txid]
+    });
+    return res.rows.length > 0;
   }
 
   // --- Stats ---
-  public getStats(): { totalKeys: number; totalNotes: number; totalZat: number } {
-    if (!this.db) throw new Error('Database not initialized');
-    const keysCount = this.db.exec('SELECT COUNT(*) as count FROM viewing_keys')[0]?.values[0][0] as number || 0;
-    const notesRes = this.db.exec('SELECT COUNT(*) as count, COALESCE(SUM(amount_zat), 0) as total FROM shielded_notes')[0]?.values[0] || [0, 0];
+  public async getStats(): Promise<{ totalKeys: number; totalNotes: number; totalZat: number }> {
+    if (!this.client) throw new Error('Database not initialized');
+    const keysRes = await this.client.execute('SELECT COUNT(*) as count FROM viewing_keys');
+    const notesRes = await this.client.execute('SELECT COUNT(*) as count, COALESCE(SUM(amount_zat), 0) as total FROM shielded_notes');
+
+    const totalKeys = Number(keysRes.rows[0]?.count || 0);
+    const totalNotes = Number(notesRes.rows[0]?.count || 0);
+    const totalZat = Number(notesRes.rows[0]?.total || 0);
+
     return {
-      totalKeys: keysCount,
-      totalNotes: notesRes[0] as number,
-      totalZat: notesRes[1] as number
+      totalKeys,
+      totalNotes,
+      totalZat
     };
   }
 
-  public deleteWebhook(id: number): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const checkStmt = this.db.prepare('SELECT id FROM webhooks WHERE id = ?');
-    checkStmt.bind([id]);
-    const exists = checkStmt.step();
-    checkStmt.free();
-    if (!exists) return false;
+  public async deleteWebhook(id: number): Promise<boolean> {
+    if (!this.client) throw new Error('Database not initialized');
+    const checkRes = await this.client.execute({
+      sql: 'SELECT id FROM webhooks WHERE id = ? LIMIT 1',
+      args: [id]
+    });
+    if (checkRes.rows.length === 0) return false;
 
     // Delete deliveries associated with this webhook and the webhook record
-    const delivStmt = this.db.prepare('DELETE FROM webhook_deliveries WHERE webhook_id = ?');
-    delivStmt.run([id]);
-    delivStmt.free();
+    await this.client.execute({
+      sql: 'DELETE FROM webhook_deliveries WHERE webhook_id = ?',
+      args: [id]
+    });
+    await this.client.execute({
+      sql: 'DELETE FROM webhooks WHERE id = ?',
+      args: [id]
+    });
 
-    const stmt = this.db.prepare('DELETE FROM webhooks WHERE id = ?');
-    stmt.run([id]);
-    stmt.free();
-
-    this.save();
     return true;
   }
 
   // --- Reset Database ---
-  public resetDatabase(options: { keepKeys?: boolean } = {}): void {
-    if (!this.db) throw new Error('Database not initialized');
+  public async resetDatabase(options: { keepKeys?: boolean } = {}): Promise<void> {
+    if (!this.client) throw new Error('Database not initialized');
     if (options.keepKeys) {
-      this.db.run(`
+      await this.client.executeMultiple(`
         DELETE FROM shielded_notes;
         DELETE FROM webhook_deliveries;
         DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries');
       `);
     } else {
-      this.db.run(`
+      await this.client.executeMultiple(`
         DELETE FROM shielded_notes;
         DELETE FROM webhook_deliveries;
         DELETE FROM webhooks;
@@ -446,7 +417,6 @@ export class DatabaseService {
         DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries', 'webhooks', 'viewing_keys');
       `);
     }
-    this.save();
   }
 }
 
