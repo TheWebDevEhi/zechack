@@ -295,8 +295,12 @@ export default function App() {
   const handlePurgeAllData = async () => {
     if (!window.confirm('⚠️ WARNING: This will purge all viewing keys, notes, webhooks, and delivery logs. Continue?')) return;
     try {
-      const res = await fetch('/api/v1/debug/purge', { method: 'POST' });
-      const data = await res.json();
+      const res = await fetch('/api/v1/system/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_keys: false })
+      });
+      const data = await res.json().catch(() => ({ error: 'Server returned non-JSON response' }));
       if (res.ok) {
         showToast('Database purged and auto-increment IDs reset to 1!');
         fetchData();

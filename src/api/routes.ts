@@ -364,7 +364,7 @@ apiRouter.post('/wallet-pair/session/:id/approve', async (req: Request, res: Res
 });
 
 // --- System & Database Reset ---
-apiRouter.post('/system/reset', async (req: Request, res: Response) => {
+const handleReset = async (req: Request, res: Response) => {
   try {
     const keepKeys = req.body?.keep_keys === true;
     await dbService.resetDatabase({ keepKeys });
@@ -377,4 +377,8 @@ apiRouter.post('/system/reset', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+apiRouter.post('/system/reset', handleReset);
+apiRouter.post('/debug/purge', handleReset);
+apiRouter.post('/admin/purge', handleReset);
