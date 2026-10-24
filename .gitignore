@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dashboard/dist/
+.env
+.env.local
+data/
+*.log
+scratch/
