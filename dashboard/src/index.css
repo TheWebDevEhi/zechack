@@ -150,6 +150,51 @@ body {
   margin-bottom: 1.5rem;
 }
 
+.brand-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mobile-hamburger-btn {
+  display: none;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+
+.mobile-hamburger-btn:hover {
+  background: var(--orange-light);
+  color: var(--orange-primary);
+  border-color: var(--orange-tint);
+}
+
+.sidebar-nav-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+@keyframes slideDownNav {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .brand-icon-wrapper {
   width: 44px;
   height: 44px;
@@ -730,6 +775,13 @@ body {
   gap: 1.25rem;
 }
 
+.simulator-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 1.5rem;
+}
+
+
 .dashboard-card {
   background: var(--bg-card);
   border-radius: var(--radius-xl);
@@ -1243,15 +1295,6 @@ body {
   }
 }
 
-/* Responsive */
-@media (max-width: 1200px) {
-  .stat-cards-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .analytics-grid {
-    grid-template-columns: 1fr;
-  }
-}
 
 /* ==========================================================================
    Connect Wallet Modal & Components
@@ -1315,7 +1358,9 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 1rem;
+  padding: 1.5rem 1rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   animation: fadeIn 0.2s ease;
 }
 
@@ -1326,12 +1371,13 @@ body {
   box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
   width: 100%;
   max-width: 620px;
-  max-height: 90vh;
-  overflow-y: auto;
+  max-height: calc(100vh - 3rem);
   position: relative;
   display: flex;
   flex-direction: column;
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  margin: auto 0;
+  overflow: hidden;
 }
 
 .app-modal-card {
@@ -1341,12 +1387,13 @@ body {
   box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
   width: 100%;
   max-width: 520px;
-  max-height: 90vh;
-  overflow-y: auto;
+  max-height: calc(100vh - 3rem);
   position: relative;
   display: flex;
   flex-direction: column;
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  margin: auto 0;
+  overflow: hidden;
 }
 
 .wallet-modal-header,
@@ -1357,11 +1404,16 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  flex-shrink: 0;
 }
 
 .app-modal-body {
   padding: 1.75rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
 }
+
 
 
 .wallet-modal-close-btn {
@@ -1429,7 +1481,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
 }
+
 
 /* Provider Hero Card */
 .wallet-provider-card {
@@ -1534,32 +1590,376 @@ body {
   margin-bottom: 0.35rem;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* ==========================================================================
+   Comprehensive Responsive System (Tablet, Mobile, Compact Breakpoints)
+   ========================================================================== */
+
+/* 1. Large Tablets & Small Laptops (1024px to 1200px) */
+@media (max-width: 1200px) {
+  .search-box-wrapper {
+    width: 280px;
+  }
+  .stat-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+  }
+  .analytics-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  .analytics-grid > .dashboard-card:first-child {
+    grid-column: 1 / -1;
+  }
+  .data-table th,
+  .data-table td {
+    padding: 0.65rem 0.65rem;
+  }
+}
+
+/* 2. Tablets (769px to 1023px) */
+@media (max-width: 1023px) {
   .app-wrapper {
     flex-direction: column;
-    padding: 0.75rem;
+    padding: 1rem;
+    gap: 1.25rem;
   }
+
+  /* Transform Sidebar into Responsive Header with Hamburger Menu */
   .app-sidebar {
     width: 100%;
     height: auto;
-    position: static;
+    position: sticky;
+    top: 0.75rem;
+    z-index: 50;
+    padding: 0.85rem 1.25rem;
+    border-radius: var(--radius-xl);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    box-shadow: var(--shadow-md);
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(12px);
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .stat-cards-grid {
-    grid-template-columns: 1fr;
-  }
-  .search-box-wrapper {
+
+  .brand-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: none;
     width: 100%;
   }
+
+  .mobile-hamburger-btn {
+    display: inline-flex;
+  }
+
+  .sidebar-nav-container {
+    display: none;
+  }
+
+  .app-sidebar.mobile-menu-open .sidebar-nav-container {
+    display: flex;
+    flex-direction: column;
+    padding-top: 1rem;
+    margin-top: 0.85rem;
+    border-top: 1px solid var(--border-subtle);
+    max-height: calc(85vh - 70px);
+    overflow-y: auto;
+    animation: slideDownNav 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .nav-section-label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text-light);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    padding-left: 0.5rem;
+  }
+
+  .nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 1rem;
+    overflow-x: visible;
+  }
+
+  .nav-item {
+    width: 100%;
+    white-space: normal;
+    flex-shrink: 0;
+    padding: 0.75rem 1rem;
+    font-size: 0.88rem;
+  }
+
+  .nav-menu:last-of-type {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    padding-top: 0.75rem;
+    border-top: 1px dashed var(--border-subtle);
+    margin-bottom: 0;
+    gap: 0.35rem;
+  }
+
+  .nav-menu:last-of-type .nav-item {
+    padding: 0.65rem 1rem;
+    font-size: 0.82rem;
+  }
+
   .top-header {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.75rem;
   }
-  .wallet-nav-tabs {
+
+  .search-box-wrapper {
+    width: 100%;
+  }
+
+  .top-header-right {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .analytics-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .simulator-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
+/* 3. Phablets & Mobile Devices (481px to 768px) */
+@media (max-width: 768px) {
+  .app-wrapper {
+    padding: 0.75rem;
+    gap: 1rem;
+  }
+
+  .app-sidebar {
+    padding: 0.75rem 1rem;
+  }
+
+  .app-sidebar.mobile-menu-open {
+    padding: 0.85rem 1rem 1rem;
+  }
+
+  .stat-cards-grid {
     grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
   }
+
+  .stat-card-featured,
+  .stat-card-white {
+    padding: 1.15rem;
+    min-height: 130px;
+  }
+
+  .stat-card-white .stat-value,
+  .stat-card-featured .stat-value {
+    font-size: 1.55rem;
+    margin: 0.35rem 0;
+  }
+
+  .stat-arrow-btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .page-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .page-title-left h1 {
+    font-size: 1.6rem;
+  }
+
+  .page-title-actions {
+    width: 100%;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .page-title-actions .btn {
+    flex: 1;
+  }
+
   .wallet-connect-banner {
     flex-direction: column;
     align-items: flex-start;
+    gap: 1rem;
+    padding: 1.15rem;
+  }
+
+  .wallet-connect-banner > div:last-child {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .wallet-connect-banner > div:last-child .btn {
+    width: 100%;
+  }
+
+  /* Modals */
+  .modal-backdrop {
+    padding: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .wallet-modal-card,
+  .app-modal-card {
+    max-height: calc(100vh - 1.5rem);
+    margin: auto 0;
+    width: 100%;
+  }
+
+  .wallet-nav-tabs {
+    grid-template-columns: repeat(2, 1fr);
+    padding: 0.5rem 0.75rem;
+  }
+
+  .wallet-modal-body,
+  .app-modal-body {
+    padding: 1.25rem;
   }
 }
+
+/* 4. Compact Mobile Devices (<= 480px, down to 320px) */
+@media (max-width: 480px) {
+  .app-wrapper {
+    padding: 0.5rem;
+    gap: 0.75rem;
+  }
+
+  .app-sidebar {
+    padding: 0.65rem 0.85rem;
+    border-radius: var(--radius-lg);
+  }
+
+  .app-sidebar.mobile-menu-open {
+    padding: 0.75rem 0.85rem 0.95rem;
+  }
+
+  .mobile-hamburger-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  .brand-text-title {
+    font-size: 1.1rem;
+  }
+
+  .brand-icon-wrapper {
+    width: 38px;
+    height: 38px;
+  }
+
+  .top-header-right {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .user-profile-badge {
+    grid-column: 1 / -1;
+    width: 100%;
+    padding: 0.45rem 0.75rem;
+    justify-content: flex-start;
+  }
+
+  .user-name-title {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+
+  .user-wallet-address {
+    font-size: 0.68rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+
+  .stat-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+  }
+
+  .page-title-left h1 {
+    font-size: 1.35rem;
+  }
+
+  .page-title-actions {
+    flex-direction: column;
+  }
+
+  .page-title-actions .btn {
+    width: 100%;
+  }
+
+  .wallet-connect-banner > div:last-child {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-pills-row {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .filter-pill {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .table-card {
+    padding: 1rem 0.75rem;
+    border-radius: var(--radius-lg);
+  }
+
+  .card-header-row {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 0.55rem 0.5rem;
+    font-size: 0.76rem;
+  }
+
+  .wallet-modal-header,
+  .app-modal-header {
+    padding: 1rem 1rem 0.75rem;
+  }
+
+  .wallet-modal-body,
+  .app-modal-body {
+    padding: 1rem;
+  }
+}
+

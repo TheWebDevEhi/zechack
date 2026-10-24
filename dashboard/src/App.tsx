@@ -25,7 +25,8 @@ import {
   Smartphone,
   Laptop,
   X,
-  Check
+  Check,
+  Menu
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -121,6 +122,10 @@ export default function App() {
   // Manual Key Modal & Webhook Modal state
   const [isManualKeyModalOpen, setIsManualKeyModalOpen] = useState<boolean>(false);
   const [isWebhookModalOpen, setIsWebhookModalOpen] = useState<boolean>(false);
+
+  // Mobile navigation drawer state
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+
 
 
   // Mobile QR pairing state
@@ -556,101 +561,133 @@ export default function App() {
       {/* ====================================================================
           LEFT SIDEBAR (Template 1 Inspired)
           ==================================================================== */}
-      <aside className="app-sidebar">
+      <aside className={`app-sidebar ${isMobileMenuOpen ? 'mobile-menu-open' : ''}`}>
         {/* Brand */}
         <div className="brand-header">
-          <div className="brand-icon-wrapper">
-            <Shield size={24} color="#ffffff" />
-          </div>
-          <div>
-            <div className="brand-text-title">
-              ZecShield
-              <span className="brand-badge">Testnet</span>
+          <div className="brand-header-left">
+            <div className="brand-icon-wrapper">
+              <Shield size={24} color="#ffffff" />
             </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Shielded Webhook Gateway</div>
+            <div>
+              <div className="brand-text-title">
+                ZecShield
+                <span className="brand-badge">Testnet</span>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Shielded Webhook Gateway</div>
+            </div>
           </div>
+
+          {/* Mobile & Tablet Portrait Hamburger Toggle */}
+          <button
+            className="mobile-hamburger-btn"
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          >
+            {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
         </div>
 
-        {/* Navigation Menu */}
-        <div className="nav-section-label">Main Menu</div>
-        <nav className="nav-menu">
-          <button
-            className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-            onClick={() => setActiveTab('overview')}
-          >
-            <div className="nav-item-left">
-              <Activity size={18} />
-              <span>Dashboard</span>
-            </div>
-            {transactions.length > 0 && <span className="nav-badge">{transactions.length}</span>}
-          </button>
+        {/* Collapsible Nav Container on Mobile */}
+        <div className="sidebar-nav-container">
+          {/* Navigation Menu */}
+          <div className="nav-section-label">Main Menu</div>
+          <nav className="nav-menu">
+            <button
+              className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('overview');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="nav-item-left">
+                <Activity size={18} />
+                <span>Dashboard</span>
+              </div>
+              {transactions.length > 0 && <span className="nav-badge">{transactions.length}</span>}
+            </button>
 
-          <button
-            className={`nav-item ${activeTab === 'keys' ? 'active' : ''}`}
-            onClick={() => setActiveTab('keys')}
-          >
-            <div className="nav-item-left">
-              <Key size={18} />
-              <span>Viewing Keys</span>
-            </div>
-            <span className="nav-badge">{keys.length}</span>
-          </button>
+            <button
+              className={`nav-item ${activeTab === 'keys' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('keys');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="nav-item-left">
+                <Key size={18} />
+                <span>Viewing Keys</span>
+              </div>
+              <span className="nav-badge">{keys.length}</span>
+            </button>
 
-          <button
-            className={`nav-item ${activeTab === 'webhooks' ? 'active' : ''}`}
-            onClick={() => setActiveTab('webhooks')}
-          >
-            <div className="nav-item-left">
-              <Webhook size={18} />
-              <span>Webhooks</span>
-            </div>
-            <span className="nav-badge">{webhooks.length}</span>
-          </button>
+            <button
+              className={`nav-item ${activeTab === 'webhooks' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('webhooks');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="nav-item-left">
+                <Webhook size={18} />
+                <span>Webhooks</span>
+              </div>
+              <span className="nav-badge">{webhooks.length}</span>
+            </button>
 
-          <button
-            className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
-            onClick={() => setActiveTab('simulator')}
-          >
-            <div className="nav-item-left">
-              <Play size={18} />
-              <span>Simulate Note</span>
-            </div>
-            <span className="nav-badge" style={{ color: 'var(--orange-primary)' }}>Test</span>
-          </button>
+            <button
+              className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('simulator');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="nav-item-left">
+                <Play size={18} />
+                <span>Simulate Note</span>
+              </div>
+              <span className="nav-badge" style={{ color: 'var(--orange-primary)' }}>Test</span>
+            </button>
 
-          <button
-            className={`nav-item ${activeTab === 'docs' ? 'active' : ''}`}
-            onClick={() => setActiveTab('docs')}
-          >
-            <div className="nav-item-left">
-              <FileCode size={18} />
-              <span>API Reference</span>
-            </div>
-          </button>
-        </nav>
+            <button
+              className={`nav-item ${activeTab === 'docs' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('docs');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="nav-item-left">
+                <FileCode size={18} />
+                <span>API Reference</span>
+              </div>
+            </button>
+          </nav>
 
-        {/* Network & Debug Section */}
-        <div className="nav-section-label">Chain & Utilities</div>
-        <nav className="nav-menu">
-          <div className="nav-item" style={{ cursor: 'default' }}>
-            <div className="nav-item-left">
-              <Radio size={16} color="var(--orange-primary)" />
-              <span style={{ fontSize: '0.82rem' }}>Block Tip #{status?.chain_tip || 4529180}</span>
+          {/* Network & Debug Section */}
+          <div className="nav-section-label">Chain & Utilities</div>
+          <nav className="nav-menu">
+            <div className="nav-item" style={{ cursor: 'default' }}>
+              <div className="nav-item-left">
+                <Radio size={16} color="var(--orange-primary)" />
+                <span style={{ fontSize: '0.82rem' }}>Block Tip #{status?.chain_tip || 4529180}</span>
+              </div>
             </div>
-          </div>
 
-          <button
-            className="nav-item"
-            style={{ color: '#be123c' }}
-            onClick={handlePurgeAllData}
-            title="Clean database and reset sequence IDs"
-          >
-            <div className="nav-item-left">
-              <RotateCcw size={16} />
-              <span style={{ fontSize: '0.82rem' }}>Purge & Reset</span>
-            </div>
-          </button>
-        </nav>
+            <button
+              className="nav-item"
+              style={{ color: '#be123c' }}
+              onClick={() => {
+                handlePurgeAllData();
+                setIsMobileMenuOpen(false);
+              }}
+              title="Clean database and reset sequence IDs"
+            >
+              <div className="nav-item-left">
+                <RotateCcw size={16} />
+                <span style={{ fontSize: '0.82rem' }}>Purge & Reset</span>
+              </div>
+            </button>
+          </nav>
+        </div>
       </aside>
 
       {/* ====================================================================
@@ -1405,7 +1442,7 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '1.5rem' }}>
+            <div className="simulator-grid">
               <div className="dashboard-card">
                 <div className="card-header-row">
                   <div className="card-title-text">Configure Simulated Note</div>
