@@ -8,6 +8,7 @@ import { config } from '../src/config.js';
 interface LatencyStats {
   total: number;
   success: number;
+  rateLimited: number;
   failed: number;
   durationMs: number;
   rps: number;
@@ -85,7 +86,7 @@ async function runLoadTest(totalRequests: number = 200, concurrency: number = 20
     heapUsed: Math.round(memStart.heapUsed / 1024 / 1024)
   };
 
-  const endpoints = [
+  const endpoints: Array<{ path: string; headers: Record<string, string> }> = [
     { path: '/health', headers: {} },
     { path: '/api/v1/status', headers: {} },
     { path: '/api/v1/transactions?limit=20', headers: { 'X-API-Key': config.readApiKey } },

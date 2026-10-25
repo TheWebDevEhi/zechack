@@ -1,4 +1,4 @@
-import { dbService } from '../src/db/database';
+import { dbService } from '../src/db/database.js';
 
 async function main() {
   await dbService.init();
@@ -15,7 +15,8 @@ async function main() {
     amount_zec: 0.01,
     transfer_type: 'incoming',
     memo_text: 'Test duplicate note',
-    is_simulated: 0
+    is_simulated: 0,
+    verification_status: 'confirmed' as const
   };
 
   // First insertion

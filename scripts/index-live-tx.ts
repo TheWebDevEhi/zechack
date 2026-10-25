@@ -28,7 +28,8 @@ async function main() {
     amount_zec: amountZec,
     transfer_type: 'incoming',
     memo_text: '',
-    is_simulated: 0
+    is_simulated: 0,
+    verification_status: 'confirmed'
   });
 
   if (!saved) {

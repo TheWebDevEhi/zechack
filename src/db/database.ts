@@ -281,7 +281,11 @@ export class DatabaseService {
     });
     if (checkRes.rows.length === 0) return false;
 
-    // Delete associated notes and viewing key
+    // Delete associated notes, scan errors, and viewing key
+    await this.client.execute({
+      sql: 'DELETE FROM scan_errors WHERE key_id = ?',
+      args: [id]
+    });
     await this.client.execute({
       sql: 'DELETE FROM shielded_notes WHERE key_id = ?',
       args: [id]
@@ -614,7 +618,9 @@ export class DatabaseService {
       await this.client.executeMultiple(`
         DELETE FROM shielded_notes;
         DELETE FROM webhook_deliveries;
-        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries');
+        DELETE FROM indexed_blocks;
+        DELETE FROM scan_errors;
+        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries', 'scan_errors');
       `);
     } else {
       await this.client.executeMultiple(`
@@ -622,7 +628,9 @@ export class DatabaseService {
         DELETE FROM webhook_deliveries;
         DELETE FROM webhooks;
         DELETE FROM viewing_keys;
-        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries', 'webhooks', 'viewing_keys');
+        DELETE FROM indexed_blocks;
+        DELETE FROM scan_errors;
+        DELETE FROM sqlite_sequence WHERE name IN ('shielded_notes', 'webhook_deliveries', 'webhooks', 'viewing_keys', 'scan_errors');
       `);
     }
   }

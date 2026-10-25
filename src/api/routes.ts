@@ -422,7 +422,7 @@ apiRouter.get('/syncer/errors', requireAuth('read'), readLimiter, async (req: Re
 
 apiRouter.post('/syncer/errors/:id/resolve', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
-    const errorId = parseInt(req.params.id, 10);
+    const errorId = parseInt(req.params.id as string, 10);
     if (isNaN(errorId)) {
       return res.status(400).json({ error: 'Invalid error ID' });
     }

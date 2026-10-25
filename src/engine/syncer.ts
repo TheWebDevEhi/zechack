@@ -6,8 +6,10 @@ import { config } from '../config.js';
 
 export class ChainSyncer {
   private isRunning: boolean = false;
+  private isSyncing: boolean = false;
   private timer: NodeJS.Timeout | null = null;
   private currentTip: number = 0;
+  private proxyUrl: string | null = null;
   private keyFailureCounts: Map<number, number> = new Map();
 
   public async start(): Promise<void> {
@@ -17,9 +19,10 @@ export class ChainSyncer {
 
     // Start local protocol adapter proxy for automatic Version 6 (ZIP 229) & multi-pool normalization
     try {
-      const proxyUrl = await protocolAdapterProxy.start();
-      console.log(`[Syncer] Protocol Adapter Proxy online at ${proxyUrl}`);
+      this.proxyUrl = await protocolAdapterProxy.start();
+      console.log(`[Syncer] Protocol Adapter Proxy online at ${this.proxyUrl}`);
     } catch (err: any) {
+      this.proxyUrl = null;
       console.warn(`[Syncer] Failed to start adapter proxy, falling back to upstream: ${err.message}`);
     }
 
@@ -36,6 +39,8 @@ export class ChainSyncer {
 
   public stop(): void {
     this.isRunning = false;
+    this.isSyncing = false;
+    this.proxyUrl = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -52,20 +57,34 @@ export class ChainSyncer {
    * Main sync cycle: Checks chain tip, verifies reorg continuity, and scans keys.
    */
   public async syncCycle(): Promise<void> {
+    if (this.isSyncing) {
+      console.log('[Syncer] Previous sync cycle still running, skipping overlap.');
+      return;
+    }
+    this.isSyncing = true;
+
     try {
       this.currentTip = await getChainTip(config.lightwalletdUrl);
+
+      // Automatic chain reorganization detection: if current tip rewound below indexed blocks
+      const latestBlock = await dbService.getLatestIndexedBlock();
+      if (latestBlock && this.currentTip > 0 && this.currentTip < latestBlock.height) {
+        console.warn(`[Syncer] Chain tip (${this.currentTip}) is lower than latest indexed block (${latestBlock.height}). Detected chain reorganization!`);
+        await this.handleReorganization(this.currentTip);
+      }
+
+      const activeKeys = await dbService.getViewingKeys(true);
+      if (!activeKeys.length) {
+        return;
+      }
+
+      for (const key of activeKeys) {
+        await this.syncKey(key, this.currentTip);
+      }
     } catch (err: any) {
-      console.warn(`[Syncer] Failed to fetch chain tip from ${config.lightwalletdUrl}: ${err.message}`);
-      return;
-    }
-
-    const activeKeys = await dbService.getViewingKeys(true);
-    if (!activeKeys.length) {
-      return;
-    }
-
-    for (const key of activeKeys) {
-      await this.syncKey(key, this.currentTip);
+      console.warn(`[Syncer] Error in sync cycle: ${err.message}`);
+    } finally {
+      this.isSyncing = false;
     }
   }
 
@@ -87,7 +106,7 @@ export class ChainSyncer {
     }
 
     const batchSize = Math.max(config.batchSize, 500);
-    const targetGrpcUrl = config.lightwalletdUrl;
+    const targetGrpcUrl = this.proxyUrl || config.lightwalletdUrl;
     const maxRetries = 3;
 
     // Fast catch-up loop: continuously process batches until caught up to chainTip

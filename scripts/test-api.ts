@@ -1,5 +1,6 @@
 import { createApp } from '../src/api/server.js';
 import { dbService } from '../src/db/database.js';
+import { config } from '../src/config.js';
 import http from 'http';
 
 async function runTests() {
@@ -38,7 +39,10 @@ async function runTests() {
     const testKeyString = 'uviewtest1samplekeyforautomatedtestverification9876543210abcdef';
     const keyRes = await fetch(`${BASE_URL}/keys`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.adminApiKey
+      },
       body: JSON.stringify({
         key: testKeyString,
         label: 'Merchant Invoice Account',
@@ -55,7 +59,10 @@ async function runTests() {
     console.log('[5/7] Testing POST /api/v1/webhooks (Register webhook)...');
     const webhookRes = await fetch(`${BASE_URL}/webhooks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.adminApiKey
+      },
       body: JSON.stringify({
         target_url: 'https://webhook.site/00000000-0000-0000-0000-000000000000',
         description: 'Store Payment Listener',
@@ -71,7 +78,10 @@ async function runTests() {
     console.log('[6/7] Testing POST /api/v1/simulator/simulate (Simulate shielded note)...');
     const simRes = await fetch(`${BASE_URL}/simulator/simulate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.adminApiKey
+      },
       body: JSON.stringify({
         amount_zec: 1.25,
         memo: 'Order #49201 Paid - Express Shipping to NYC',
@@ -85,7 +95,11 @@ async function runTests() {
 
     // 7. Test GET /transactions (Verify indexed note & memo)
     console.log('[7/7] Testing GET /api/v1/transactions...');
-    const txRes = await fetch(`${BASE_URL}/transactions`);
+    const txRes = await fetch(`${BASE_URL}/transactions`, {
+      headers: {
+        'X-API-Key': config.adminApiKey
+      }
+    });
     const txData = await txRes.json();
     console.log('      Indexed transactions response:', JSON.stringify(txData, null, 2));
     if (!txRes.ok || txData.count < 1) throw new Error('Transactions query failed or empty');

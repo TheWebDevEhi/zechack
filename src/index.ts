@@ -23,12 +23,27 @@ async function bootstrap() {
   // 3. Start Background Chain Syncer
   await chainSyncer.start();
 
-  // Graceful shutdown
+  // Graceful shutdown with forced termination safeguard
+  let isShuttingDown = false;
   const shutdown = () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     console.log('\n[Shutdown] Stopping services...');
     chainSyncer.stop();
+
+    const forceTimer = setTimeout(() => {
+      console.warn('[Shutdown] Forced shutdown after timeout.');
+      process.exit(1);
+    }, 5000);
+    if (typeof forceTimer.unref === 'function') forceTimer.unref();
+
+    if (typeof (server as any).closeAllConnections === 'function') {
+      (server as any).closeAllConnections();
+    }
+
     server.close(() => {
-      console.log('[Shutdown] Server closed. Exiting.');
+      clearTimeout(forceTimer);
+      console.log('[Shutdown] Server closed cleanly. Exiting.');
       process.exit(0);
     });
   };
