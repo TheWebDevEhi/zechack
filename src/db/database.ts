@@ -22,6 +22,7 @@ export interface ShieldedNoteRecord {
   key_id: number;
   txid: string;
   block_height: number;
+  block_hash?: string;
   block_time: number;
   pool: 'Orchard' | 'Sapling' | 'Ironwood';
   amount_zat: number;
@@ -29,8 +30,27 @@ export interface ShieldedNoteRecord {
   transfer_type: string;
   memo_text: string;
   is_simulated: number;
-  verification_status: 'confirmed' | 'simulated' | 'unverified';
+  verification_status: 'confirmed' | 'simulated' | 'unverified' | 'reorganized';
   created_at: number;
+}
+
+export interface IndexedBlockRecord {
+  height: number;
+  block_hash: string;
+  prev_hash?: string;
+  indexed_at: number;
+}
+
+export interface ScanErrorRecord {
+  id: number;
+  key_id: number;
+  start_height: number;
+  end_height: number;
+  error_message: string;
+  retry_count: number;
+  status: 'failed' | 'resolved';
+  created_at: number;
+  updated_at: number;
 }
 
 export interface WebhookRecord {
@@ -142,6 +162,25 @@ export class DatabaseService {
         response_body TEXT,
         delivered_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS indexed_blocks (
+        height INTEGER PRIMARY KEY,
+        block_hash TEXT NOT NULL,
+        prev_hash TEXT,
+        indexed_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS scan_errors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_id INTEGER NOT NULL,
+        start_height INTEGER NOT NULL,
+        end_height INTEGER NOT NULL,
+        error_message TEXT NOT NULL,
+        retry_count INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'failed',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
 
     // Run graceful schema migrations on existing SQLite/Turso tables
@@ -150,6 +189,9 @@ export class DatabaseService {
     } catch {}
     try {
       await this.client.execute("ALTER TABLE shielded_notes ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'confirmed'");
+    } catch {}
+    try {
+      await this.client.execute('ALTER TABLE shielded_notes ADD COLUMN block_hash TEXT');
     } catch {}
   }
 
@@ -256,13 +298,14 @@ export class DatabaseService {
     const insertRes = await this.client.execute({
       sql: `
         INSERT OR IGNORE INTO shielded_notes 
-        (key_id, txid, block_height, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, verification_status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (key_id, txid, block_height, block_hash, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, verification_status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         note.key_id,
         note.txid,
         note.block_height,
+        note.block_hash || '',
         note.block_time,
         note.pool,
         note.amount_zat,
@@ -398,6 +441,114 @@ export class DatabaseService {
       args: [webhookId, txid]
     });
     return res.rows.length > 0;
+  }
+
+  // --- Block Hash & Chain Reorganization Tracking ---
+  public async addIndexedBlock(height: number, blockHash: string, prevHash?: string): Promise<void> {
+    if (!this.client) throw new Error('Database not initialized');
+    const now = Math.floor(Date.now() / 1000);
+    await this.client.execute({
+      sql: `INSERT OR REPLACE INTO indexed_blocks (height, block_hash, prev_hash, indexed_at)
+            VALUES (?, ?, ?, ?)`,
+      args: [height, blockHash, prevHash || '', now]
+    });
+  }
+
+  public async getIndexedBlock(height: number): Promise<IndexedBlockRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM indexed_blocks WHERE height = ? LIMIT 1',
+      args: [height]
+    });
+    if (res.rows.length === 0) return null;
+    return res.rows[0] as unknown as IndexedBlockRecord;
+  }
+
+  public async getLatestIndexedBlock(): Promise<IndexedBlockRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute('SELECT * FROM indexed_blocks ORDER BY height DESC LIMIT 1');
+    if (res.rows.length === 0) return null;
+    return res.rows[0] as unknown as IndexedBlockRecord;
+  }
+
+  /**
+   * Rolls back indexed data to a specific fork point height during a chain reorganization.
+   * Marks notes above forkHeight as 'reorganized', prunes indexed_blocks,
+   * and rewinds viewing keys' last_scanned_height back to forkHeight.
+   */
+  public async rollbackToHeight(forkHeight: number): Promise<{ rolledBackNotes: ShieldedNoteRecord[]; affectedHeight: number }> {
+    if (!this.client) throw new Error('Database not initialized');
+
+    // 1. Fetch notes that were indexed on the orphaned fork
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM shielded_notes WHERE block_height > ? AND is_simulated = 0 AND verification_status = ?',
+      args: [forkHeight, 'confirmed']
+    });
+    const rolledBackNotes = res.rows as unknown as ShieldedNoteRecord[];
+
+    // 2. Mark notes on orphaned fork as 'reorganized'
+    await this.client.execute({
+      sql: 'UPDATE shielded_notes SET verification_status = ? WHERE block_height > ? AND is_simulated = 0',
+      args: ['reorganized', forkHeight]
+    });
+
+    // 3. Remove orphaned blocks from indexed_blocks
+    await this.client.execute({
+      sql: 'DELETE FROM indexed_blocks WHERE height > ?',
+      args: [forkHeight]
+    });
+
+    // 4. Rewind viewing keys whose last_scanned_height was beyond the fork point
+    await this.client.execute({
+      sql: 'UPDATE viewing_keys SET last_scanned_height = ? WHERE last_scanned_height > ?',
+      args: [forkHeight, forkHeight]
+    });
+
+    return { rolledBackNotes, affectedHeight: forkHeight };
+  }
+
+  // --- Scan Errors / Dead-Letter Queue ---
+  public async recordScanError(
+    keyId: number,
+    startHeight: number,
+    endHeight: number,
+    errorMessage: string,
+    retryCount: number
+  ): Promise<number> {
+    if (!this.client) throw new Error('Database not initialized');
+    const now = Math.floor(Date.now() / 1000);
+    const res = await this.client.execute({
+      sql: `INSERT INTO scan_errors (key_id, start_height, end_height, error_message, retry_count, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)`,
+      args: [keyId, startHeight, endHeight, errorMessage, retryCount, now, now]
+    });
+    return Number(res.lastInsertRowid || 0);
+  }
+
+  public async getScanErrors(status?: string, limit: number = 50): Promise<ScanErrorRecord[]> {
+    if (!this.client) throw new Error('Database not initialized');
+    if (status) {
+      const res = await this.client.execute({
+        sql: 'SELECT * FROM scan_errors WHERE status = ? ORDER BY id DESC LIMIT ?',
+        args: [status, limit]
+      });
+      return res.rows as unknown as ScanErrorRecord[];
+    }
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM scan_errors ORDER BY id DESC LIMIT ?',
+      args: [limit]
+    });
+    return res.rows as unknown as ScanErrorRecord[];
+  }
+
+  public async resolveScanError(id: number): Promise<boolean> {
+    if (!this.client) throw new Error('Database not initialized');
+    const now = Math.floor(Date.now() / 1000);
+    const res = await this.client.execute({
+      sql: "UPDATE scan_errors SET status = 'resolved', updated_at = ? WHERE id = ?",
+      args: [now, id]
+    });
+    return res.rowsAffected > 0;
   }
 
   // --- Stats ---

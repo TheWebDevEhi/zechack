@@ -12,6 +12,7 @@
     "db:reset": "tsx scripts/reset-db.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "test:security": "tsx --test tests/phase1-security.test.ts",
+    "test:load": "tsx scripts/load-test.ts",
     "test:api": "tsx scripts/test-api.ts",
     "test:webhook": "tsx scripts/test-webhook-live.ts",
     "test:grpc": "tsx scripts/test-grpc.ts"

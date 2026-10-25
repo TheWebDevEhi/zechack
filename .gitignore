@@ -6,3 +6,4 @@ dashboard/dist/
 data/
 *.log
 scratch/
+data/zecshield.db

@@ -4,7 +4,7 @@ import { URL } from 'url';
 /**
  * Checks whether an IPv4 address belongs to a reserved, private, loopback, or cloud-metadata range.
  */
-function isRestrictedIpv4(ip: string): boolean {
+function isRestrictedIpv4(ip: string, allowLocalhost: boolean = false): boolean {
   const parts = ip.split('.').map((p) => parseInt(p, 10));
   if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
     return true; // malformed treated as restricted
@@ -22,7 +22,9 @@ function isRestrictedIpv4(ip: string): boolean {
   if (a === 100 && b >= 64 && b <= 127) return true;
 
   // 127.0.0.0/8 - Loopback
-  if (a === 127) return true;
+  if (a === 127) {
+    return !allowLocalhost;
+  }
 
   // 169.254.0.0/16 - Link-local / Cloud metadata (AWS, GCP, Azure 169.254.169.254)
   if (a === 169 && b === 254) return true;
@@ -60,17 +62,20 @@ function isRestrictedIpv4(ip: string): boolean {
 /**
  * Checks whether an IPv6 address belongs to a reserved, private, or loopback range.
  */
-function isRestrictedIpv6(ip: string): boolean {
+function isRestrictedIpv6(ip: string, allowLocalhost: boolean = false): boolean {
   const normalized = ip.toLowerCase();
 
   // Loopback / Unspecified
-  if (normalized === '::1' || normalized === '::') return true;
+  if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') {
+    return !allowLocalhost;
+  }
+  if (normalized === '::') return true;
 
   // IPv4-mapped IPv6 (::ffff:192.0.2.128 or ::ffff:7f00:1)
   if (normalized.startsWith('::ffff:')) {
     const v4Part = normalized.slice('::ffff:'.length);
     if (v4Part.includes('.')) {
-      return isRestrictedIpv4(v4Part);
+      return isRestrictedIpv4(v4Part, allowLocalhost);
     }
   }
 
@@ -97,12 +102,13 @@ export interface WebhookUrlValidationResult {
 /**
  * Validates a target webhook URL against SSRF vulnerabilities:
  * - Scheme must be HTTPS (or HTTP if allowHttp is explicitly enabled).
- * - Hostname cannot be localhost or internal naming.
+ * - Hostname cannot be localhost or internal naming (unless allowLocalhost is set).
  * - Resolves all DNS A/AAAA records and rejects any private, loopback, or cloud-metadata IP.
  */
 export async function validateWebhookUrl(
   urlStr: string,
-  allowHttp: boolean = false
+  allowHttp: boolean = false,
+  allowLocalhost: boolean = false
 ): Promise<WebhookUrlValidationResult> {
   if (!urlStr || typeof urlStr !== 'string') {
     return { isValid: false, error: 'Target URL is required' };
@@ -126,12 +132,12 @@ export async function validateWebhookUrl(
   const hostname = parsed.hostname.toLowerCase();
 
   // Basic hostname checks
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+  if (!hostname || (!allowLocalhost && hostname === 'localhost') || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     return { isValid: false, error: `Disallowed hostname: "${hostname}"` };
   }
 
   // If hostname is directly an IP literal
-  if (isRestrictedIpv4(hostname) || isRestrictedIpv6(hostname)) {
+  if (isRestrictedIpv4(hostname, allowLocalhost) || isRestrictedIpv6(hostname, allowLocalhost)) {
     return { isValid: false, error: `Target URL references a private, loopback, or metadata IP address` };
   }
 
@@ -146,7 +152,7 @@ export async function validateWebhookUrl(
 
     for (const record of lookupResults) {
       const isRestricted =
-        record.family === 4 ? isRestrictedIpv4(record.address) : isRestrictedIpv6(record.address);
+        record.family === 4 ? isRestrictedIpv4(record.address, allowLocalhost) : isRestrictedIpv6(record.address, allowLocalhost);
 
       if (isRestricted) {
         return {

@@ -8,11 +8,24 @@ import { config } from '../config.js';
 import { requireAuth, auditLog } from '../security/auth.js';
 import { sanitizeViewingKey, sanitizeWebhook } from '../security/redaction.js';
 import { validateWebhookUrl } from '../security/ssrf.js';
+import {
+  validateTxid,
+  validateBlockHeight,
+  validateAmountZec,
+  validatePool,
+  validatePagination,
+  validateViewingKeyInput
+} from '../security/validation.js';
+import { createRateLimiter } from '../security/rate-limit.js';
 
 export const apiRouter = Router();
 
+// Per-endpoint rate limiters
+const readLimiter = createRateLimiter({ max: 300, windowMs: 60_000 });
+const writeLimiter = createRateLimiter({ max: 60, windowMs: 60_000 });
+
 // --- Status & Health (Public Read-Only) ---
-apiRouter.get('/status', async (req: Request, res: Response) => {
+apiRouter.get('/status', readLimiter, async (req: Request, res: Response) => {
   try {
     const stats = await dbService.getStats();
     const chainTip = chainSyncer.getLatestTip();
@@ -37,14 +50,21 @@ apiRouter.get('/status', async (req: Request, res: Response) => {
 });
 
 // --- Viewing Keys Management (Protected) ---
-apiRouter.post('/keys', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.post('/keys', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const { key, label, birth_height, key_type } = req.body;
-    if (!key || typeof key !== 'string') {
-      return res.status(400).json({ error: 'Missing or invalid "key" field' });
+
+    const keyVal = validateViewingKeyInput(key, key_type);
+    if (!keyVal.isValid) {
+      return res.status(400).json({ error: keyVal.error });
     }
 
-    const trimmedKey = key.trim();
+    const birthHeightVal = validateBlockHeight(birth_height !== undefined ? birth_height : 0);
+    if (!birthHeightVal.isValid) {
+      return res.status(400).json({ error: birthHeightVal.error });
+    }
+
+    const trimmedKey = keyVal.value!.cleanKey;
     const existing = await dbService.getViewingKeyByString(trimmedKey);
     if (existing) {
       return res.status(200).json({
@@ -53,17 +73,14 @@ apiRouter.post('/keys', requireAuth('admin'), async (req: Request, res: Response
       });
     }
 
-    const determinedType = key_type || (trimmedKey.startsWith('uview') ? 'UFVK' : 'ViewingKey');
-    const birthHeight = parseInt(birth_height, 10) || 0;
-
     const record = await dbService.addViewingKey(
       trimmedKey,
-      determinedType,
+      keyVal.value!.determinedType,
       label || 'Default Key',
-      birthHeight
+      birthHeightVal.value!
     );
 
-    auditLog(req, 'CREATE_VIEWING_KEY', { id: record.id, key_type: determinedType, label: record.label });
+    auditLog(req, 'CREATE_VIEWING_KEY', { id: record.id, key_type: keyVal.value!.determinedType, label: record.label });
 
     res.status(201).json({
       message: 'Viewing key successfully registered',
@@ -74,7 +91,7 @@ apiRouter.post('/keys', requireAuth('admin'), async (req: Request, res: Response
   }
 });
 
-apiRouter.get('/keys', requireAuth('read'), async (req: Request, res: Response) => {
+apiRouter.get('/keys', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
   try {
     const keys = await dbService.getViewingKeys(false);
     const chainTip = chainSyncer.getLatestTip();
@@ -94,10 +111,10 @@ apiRouter.get('/keys', requireAuth('read'), async (req: Request, res: Response) 
   }
 });
 
-apiRouter.delete('/keys/:id', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.delete('/keys/:id', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isNaN(id)) {
+    if (isNaN(id) || id <= 0) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
     const deleted = await dbService.deleteViewingKey(id);
@@ -112,10 +129,10 @@ apiRouter.delete('/keys/:id', requireAuth('admin'), async (req: Request, res: Re
   }
 });
 
-apiRouter.delete('/viewing-keys/:id', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.delete('/viewing-keys/:id', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isNaN(id)) {
+    if (isNaN(id) || id <= 0) {
       return res.status(400).json({ error: 'Invalid key ID' });
     }
     const deleted = await dbService.deleteViewingKey(id);
@@ -131,22 +148,29 @@ apiRouter.delete('/viewing-keys/:id', requireAuth('admin'), async (req: Request,
 });
 
 // --- Transactions & Shielded Notes (Protected) ---
-apiRouter.get('/transactions', requireAuth('read'), async (req: Request, res: Response) => {
+apiRouter.get('/transactions', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string, 10) || 50;
-    const keyId = req.query.key_id ? parseInt(req.query.key_id as string, 10) : undefined;
+    const limitVal = validatePagination(req.query.limit, 50, 100);
+    if (!limitVal.isValid) {
+      return res.status(400).json({ error: limitVal.error });
+    }
 
-    const notes = await dbService.getShieldedNotes(limit, keyId);
+    const keyId = req.query.key_id ? parseInt(req.query.key_id as string, 10) : undefined;
+    const notes = await dbService.getShieldedNotes(limitVal.value, keyId);
     res.json({ count: notes.length, transactions: notes });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-apiRouter.get('/transactions/:txid', requireAuth('read'), async (req: Request, res: Response) => {
+apiRouter.get('/transactions/:txid', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
   try {
-    const txid = String(req.params.txid);
-    const note = await dbService.getNoteByTxid(txid);
+    const txidVal = validateTxid(req.params.txid);
+    if (!txidVal.isValid) {
+      return res.status(400).json({ error: txidVal.error });
+    }
+
+    const note = await dbService.getNoteByTxid(txidVal.value!);
     if (!note) {
       return res.status(404).json({ error: 'Transaction not found in indexed records' });
     }
@@ -157,17 +181,13 @@ apiRouter.get('/transactions/:txid', requireAuth('read'), async (req: Request, r
 });
 
 // Privileged on-chain transaction indexing with strict validation and verification
-apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const { key_id, txid, block_height, block_time, pool, amount_zec, memo, verify_on_chain } = req.body;
-    if (!txid || typeof txid !== 'string') {
-      return res.status(400).json({ error: 'Missing or invalid txid' });
-    }
 
-    const cleanTxid = txid.trim().toLowerCase();
-    // Validate hex transaction format (64 hex characters)
-    if (!/^[0-9a-f]{64}$/.test(cleanTxid)) {
-      return res.status(400).json({ error: 'Invalid transaction hash format. Must be a 64-character hex string.' });
+    const txidVal = validateTxid(txid);
+    if (!txidVal.isValid) {
+      return res.status(400).json({ error: txidVal.error });
     }
 
     const keyId = parseInt(key_id, 10);
@@ -180,22 +200,25 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), async (req
       return res.status(404).json({ error: `Viewing key #${keyId} not found. Cannot associate transaction.` });
     }
 
-    const blockHeight = parseInt(block_height, 10);
-    if (isNaN(blockHeight) || blockHeight <= 0) {
-      return res.status(400).json({ error: 'Valid positive block_height is required' });
-    }
-
-    // Verify against latest chain tip
     const chainTip = chainSyncer.getLatestTip();
-    if (chainTip > 0 && blockHeight > chainTip) {
-      return res.status(400).json({
-        error: `Invalid block height ${blockHeight}. Current chain tip is ${chainTip}. Cannot index future block.`
-      });
+    const heightVal = validateBlockHeight(block_height, chainTip);
+    if (!heightVal.isValid) {
+      return res.status(400).json({ error: heightVal.error });
     }
 
-    // On-chain verification guard: reject unverified transactions if verification is requested or in production
+    const amountVal = validateAmountZec(amount_zec || 0.00001);
+    if (!amountVal.isValid) {
+      return res.status(400).json({ error: amountVal.error });
+    }
+
+    const poolVal = validatePool(pool);
+    if (!poolVal.isValid) {
+      return res.status(400).json({ error: poolVal.error });
+    }
+
+    const cleanTxid = txidVal.value!;
+    // On-chain verification guard
     if (verify_on_chain === true || config.nodeEnv === 'production') {
-      // If the txid is clearly a test or fabricated mock pattern, reject it
       if (cleanTxid.startsWith('00000000') || cleanTxid.includes('deadbeef') || cleanTxid.includes('test')) {
         return res.status(400).json({
           error: 'On-chain verification failed: Transaction not found on Zcash network.'
@@ -203,15 +226,15 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), async (req
       }
     }
 
-    const amount = parseFloat(amount_zec) || 0.00001;
+    const amount = amountVal.value!;
     const zat = Math.round(amount * 100_000_000);
 
     const note = await dbService.addShieldedNote({
       key_id: keyId,
       txid: cleanTxid,
-      block_height: blockHeight,
+      block_height: heightVal.value!,
       block_time: parseInt(block_time, 10) || Math.floor(Date.now() / 1000),
-      pool: pool || 'Ironwood',
+      pool: poolVal.value!,
       amount_zat: zat,
       amount_zec: amount,
       transfer_type: 'incoming',
@@ -221,7 +244,7 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), async (req
     });
 
     if (note) {
-      auditLog(req, 'INDEX_CONFIRMED_TRANSACTION', { txid: cleanTxid, block_height: blockHeight, amount_zec: amount });
+      auditLog(req, 'INDEX_CONFIRMED_TRANSACTION', { txid: cleanTxid, block_height: heightVal.value, amount_zec: amount });
       await WebhookDispatcher.dispatchNote(note);
     }
 
@@ -235,7 +258,7 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), async (req
 });
 
 // --- Webhooks Management (Protected) ---
-apiRouter.post('/webhooks', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.post('/webhooks', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const { target_url, secret, description } = req.body;
     if (!target_url || typeof target_url !== 'string') {
@@ -245,7 +268,7 @@ apiRouter.post('/webhooks', requireAuth('admin'), async (req: Request, res: Resp
     const trimmedUrl = target_url.trim();
 
     // SSRF Validation
-    const ssrfCheck = await validateWebhookUrl(trimmedUrl, config.allowHttpWebhooks);
+    const ssrfCheck = await validateWebhookUrl(trimmedUrl, config.allowHttpWebhooks, config.allowLocalhostWebhooks);
     if (!ssrfCheck.isValid) {
       return res.status(400).json({
         error: `Webhook registration rejected by SSRF policy: ${ssrfCheck.error}`
@@ -271,7 +294,7 @@ apiRouter.post('/webhooks', requireAuth('admin'), async (req: Request, res: Resp
   }
 });
 
-apiRouter.get('/webhooks', requireAuth('read'), async (req: Request, res: Response) => {
+apiRouter.get('/webhooks', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
   try {
     const webhooks = await dbService.getActiveWebhooks();
     res.json({ webhooks: webhooks.map((w) => sanitizeWebhook(w, true)) });
@@ -280,10 +303,10 @@ apiRouter.get('/webhooks', requireAuth('read'), async (req: Request, res: Respon
   }
 });
 
-apiRouter.delete('/webhooks/:id', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.delete('/webhooks/:id', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isNaN(id)) {
+    if (isNaN(id) || id <= 0) {
       return res.status(400).json({ error: 'Invalid webhook ID' });
     }
     const deleted = await dbService.deleteWebhook(id);
@@ -298,10 +321,13 @@ apiRouter.delete('/webhooks/:id', requireAuth('admin'), async (req: Request, res
   }
 });
 
-apiRouter.get('/webhooks/deliveries', requireAuth('read'), async (req: Request, res: Response) => {
+apiRouter.get('/webhooks/deliveries', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string, 10) || 50;
-    const deliveries = await dbService.getWebhookDeliveries(limit);
+    const limitVal = validatePagination(req.query.limit, 50, 100);
+    if (!limitVal.isValid) {
+      return res.status(400).json({ error: limitVal.error });
+    }
+    const deliveries = await dbService.getWebhookDeliveries(limitVal.value);
     res.json({ count: deliveries.length, deliveries });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -309,15 +335,25 @@ apiRouter.get('/webhooks/deliveries', requireAuth('read'), async (req: Request, 
 });
 
 // --- Demo & Pitch Simulator (Protected, Safe Simulation with Production Webhook) ---
-apiRouter.post('/simulator/simulate', requireAuth('admin'), async (req: Request, res: Response) => {
+apiRouter.post('/simulator/simulate', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
   try {
     const { key_id, amount_zec, memo, pool, transfer_type, txid, block_height } = req.body;
 
+    const amountVal = validateAmountZec(amount_zec || 0.75);
+    if (!amountVal.isValid) {
+      return res.status(400).json({ error: amountVal.error });
+    }
+
+    const poolVal = validatePool(pool);
+    if (!poolVal.isValid) {
+      return res.status(400).json({ error: poolVal.error });
+    }
+
     const note = await PaymentSimulator.simulatePayment({
       keyId: key_id ? parseInt(key_id, 10) : undefined,
-      amountZec: parseFloat(amount_zec) || 0.75,
+      amountZec: amountVal.value!,
       memo: memo !== undefined ? memo : 'Hackathon Demo Payment - Invoice #ZEC-9901',
-      pool: pool || 'Orchard',
+      pool: poolVal.value!,
       transferType: transfer_type || 'incoming',
       txid: txid || undefined,
       blockHeight: block_height ? parseInt(block_height, 10) : undefined
@@ -329,6 +365,61 @@ apiRouter.post('/simulator/simulate', requireAuth('admin'), async (req: Request,
       message: 'Simulated payment recorded and simulation webhook dispatched',
       transaction: note
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Chain Reorganization Handling (Admin Only) ---
+apiRouter.post('/reorg/simulate', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
+  try {
+    const { fork_height } = req.body;
+    const heightVal = validateBlockHeight(fork_height);
+    if (!heightVal.isValid) {
+      return res.status(400).json({ error: heightVal.error });
+    }
+
+    const result = await chainSyncer.handleReorganization(heightVal.value!);
+    auditLog(req, 'SIMULATE_REORG', {
+      fork_height: heightVal.value,
+      affected_notes_count: result.rolledBackNotes.length
+    });
+
+    res.json({
+      message: `Chain reorganization successfully processed back to fork height ${heightVal.value}`,
+      fork_height: heightVal.value,
+      rolled_back_notes_count: result.rolledBackNotes.length,
+      rolled_back_notes: result.rolledBackNotes
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Dead-Letter Queue & Scanner Error Tracking ---
+apiRouter.get('/syncer/errors', requireAuth('read'), readLimiter, async (req: Request, res: Response) => {
+  try {
+    const limitVal = validatePagination(req.query.limit, 50, 100);
+    const status = req.query.status as string | undefined;
+    const errors = await dbService.getScanErrors(status, limitVal.value);
+    res.json({ count: errors.length, errors });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/syncer/errors/:id/resolve', requireAuth('admin'), writeLimiter, async (req: Request, res: Response) => {
+  try {
+    const errorId = parseInt(req.params.id, 10);
+    if (isNaN(errorId)) {
+      return res.status(400).json({ error: 'Invalid error ID' });
+    }
+    const resolved = await dbService.resolveScanError(errorId);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Scan error record not found' });
+    }
+    auditLog(req, 'RESOLVE_SCAN_ERROR', { error_id: errorId });
+    res.json({ message: `Scan error #${errorId} marked as resolved` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -355,7 +446,7 @@ function cleanupSessions() {
 }
 
 // 1. Create a pairing session
-apiRouter.post('/wallet-pair/session', requireAuth('admin'), (req: Request, res: Response) => {
+apiRouter.post('/wallet-pair/session', requireAuth('admin'), writeLimiter, (req: Request, res: Response) => {
   cleanupSessions();
   const sessionId = 'zpair_' + crypto.randomBytes(12).toString('hex');
   const now = Date.now();
@@ -384,7 +475,7 @@ apiRouter.post('/wallet-pair/session', requireAuth('admin'), (req: Request, res:
 });
 
 // 2. Poll session status
-apiRouter.get('/wallet-pair/session/:id', (req: Request, res: Response) => {
+apiRouter.get('/wallet-pair/session/:id', readLimiter, (req: Request, res: Response) => {
   cleanupSessions();
   const id = req.params.id as string;
   const session = pairSessions.get(id);
@@ -401,7 +492,7 @@ apiRouter.get('/wallet-pair/session/:id', (req: Request, res: Response) => {
 });
 
 // 3. Approve wallet pairing (from mobile companion or scanner)
-apiRouter.post('/wallet-pair/session/:id/approve', async (req: Request, res: Response) => {
+apiRouter.post('/wallet-pair/session/:id/approve', writeLimiter, async (req: Request, res: Response) => {
   cleanupSessions();
   const id = req.params.id as string;
   const session = pairSessions.get(id);
@@ -411,22 +502,22 @@ apiRouter.post('/wallet-pair/session/:id/approve', async (req: Request, res: Res
   }
 
   const { key, label, birth_height, key_type } = req.body;
-  if (!key || typeof key !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid "key" field' });
+  const keyVal = validateViewingKeyInput(key, key_type);
+  if (!keyVal.isValid) {
+    return res.status(400).json({ error: keyVal.error });
   }
 
-  const trimmedKey = key.trim();
+  const trimmedKey = keyVal.value!.cleanKey;
   let existing = await dbService.getViewingKeyByString(trimmedKey);
   let record = existing;
 
   if (!record) {
-    const determinedType = key_type || (trimmedKey.startsWith('uview') ? 'UFVK' : 'ViewingKey');
-    const birthHeight = parseInt(birth_height, 10) || 0;
+    const birthHeightVal = validateBlockHeight(birth_height !== undefined ? birth_height : 0);
     record = await dbService.addViewingKey(
       trimmedKey,
-      determinedType,
+      keyVal.value!.determinedType,
       label || 'Connected Mobile Wallet',
-      birthHeight
+      birthHeightVal.value || 0
     );
   }
 
@@ -456,6 +547,6 @@ const handleReset = async (req: Request, res: Response) => {
   }
 };
 
-apiRouter.post('/system/reset', requireAuth('admin'), handleReset);
-apiRouter.post('/debug/purge', requireAuth('admin'), handleReset);
-apiRouter.post('/admin/purge', requireAuth('admin'), handleReset);
+apiRouter.post('/system/reset', requireAuth('admin'), writeLimiter, handleReset);
+apiRouter.post('/debug/purge', requireAuth('admin'), writeLimiter, handleReset);
+apiRouter.post('/admin/purge', requireAuth('admin'), writeLimiter, handleReset);

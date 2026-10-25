@@ -23,7 +23,10 @@ export class WebhookDispatcher {
     const eventName = isSimulated ? 'shielded_note.simulated' : 'shielded_note.confirmed';
     const timestamp = Math.floor(Date.now() / 1000);
 
+    const eventId = `evt_note_${note.id}_${note.txid.slice(0, 10)}`;
+
     const payload = {
+      event_id: eventId,
       event: eventName,
       data: {
         note_id: note.id,
@@ -46,7 +49,7 @@ export class WebhookDispatcher {
 
     for (const webhook of activeWebhooks) {
       // Validate against SSRF before connecting
-      const ssrfCheck = await validateWebhookUrl(webhook.target_url, config.allowHttpWebhooks);
+      const ssrfCheck = await validateWebhookUrl(webhook.target_url, config.allowHttpWebhooks, config.allowLocalhostWebhooks);
       if (!ssrfCheck.isValid) {
         console.warn(`[Webhook] Blocked dispatch to #${webhook.id} due to SSRF policy: ${ssrfCheck.error} (${webhook.target_url})`);
         await dbService.logWebhookDelivery(
@@ -59,13 +62,53 @@ export class WebhookDispatcher {
         continue;
       }
 
-      // Note: Multi-note deduplication logic will be refined in Phase 3
-      if ((await dbService.hasSuccessfulDelivery(webhook.id, note.id))) {
+      // Note identity deduplication: Deduplicated by (webhook.id, note.id), NOT txid alone!
+      // This ensures that multi-note transactions deliver webhooks for each incoming note independently.
+      if (await dbService.hasSuccessfulDelivery(webhook.id, note.id)) {
         console.log(`[Webhook] Note #${note.id} was already successfully delivered to webhook #${webhook.id}. Skipping duplicate.`);
         continue;
       }
 
-      await this.sendWithRetry(webhook, note.id, payloadJson, eventName, isSimulated, timestamp, 3);
+      await this.sendWithRetry(webhook, note.id, payloadJson, eventName, isSimulated, timestamp, eventId, 3);
+    }
+  }
+
+  /**
+   * Dispatches chain reorganization alerts to all active webhooks when a transaction is reverted.
+   */
+  public static async dispatchReorg(revertedNotes: ShieldedNoteRecord[], forkHeight: number): Promise<void> {
+    if (!revertedNotes || revertedNotes.length === 0) return;
+    const activeWebhooks = await dbService.getActiveWebhooks();
+    if (!activeWebhooks.length) return;
+
+    for (const note of revertedNotes) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const eventName = 'shielded_note.reorganized';
+      const eventId = `evt_reorg_${note.id}_${note.txid.slice(0, 10)}`;
+      const payload = {
+        event_id: eventId,
+        event: eventName,
+        data: {
+          note_id: note.id,
+          key_id: note.key_id,
+          txid: note.txid,
+          block_height: note.block_height,
+          fork_height: forkHeight,
+          pool: note.pool,
+          amount_zat: note.amount_zat,
+          amount_zec: note.amount_zec,
+          status: 'reorganized',
+          reason: 'chain_reorganization'
+        },
+        timestamp
+      };
+      const payloadJson = JSON.stringify(payload);
+
+      for (const webhook of activeWebhooks) {
+        const ssrfCheck = await validateWebhookUrl(webhook.target_url, config.allowHttpWebhooks, config.allowLocalhostWebhooks);
+        if (!ssrfCheck.isValid) continue;
+        await this.sendWithRetry(webhook, note.id, payloadJson, eventName, false, timestamp, eventId, 3);
+      }
     }
   }
 
@@ -76,6 +119,7 @@ export class WebhookDispatcher {
     eventName: string,
     isSimulated: boolean,
     timestamp: number,
+    eventId: string,
     maxRetries: number
   ): Promise<void> {
     const signature = crypto
@@ -84,7 +128,7 @@ export class WebhookDispatcher {
       .digest('hex');
 
     let attempt = 0;
-    let delay = 1000;
+    let delay = config.nodeEnv === 'test' ? 20 : 1000;
 
     while (attempt < maxRetries) {
       attempt++;
@@ -95,6 +139,7 @@ export class WebhookDispatcher {
             'Content-Type': 'application/json',
             'X-ZecShield-Signature': signature,
             'X-ZecShield-Event': eventName,
+            'X-ZecShield-Event-Id': eventId,
             'X-ZecShield-Simulated': isSimulated ? 'true' : 'false',
             'X-ZecShield-Delivery-Timestamp': timestamp.toString(),
             'User-Agent': 'ZecShield-Webhook-Dispatcher/1.0'

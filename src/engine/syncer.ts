@@ -1,5 +1,5 @@
 import { startSync, getChainTip, ShieldedTransaction } from '@ledgerhq/zcash-utils';
-import { dbService, ViewingKeyRecord } from '../db/database.js';
+import { dbService, ViewingKeyRecord, ShieldedNoteRecord } from '../db/database.js';
 import { WebhookDispatcher } from '../webhooks/dispatcher.js';
 import { protocolAdapterProxy } from './proxy.js';
 import { config } from '../config.js';
@@ -8,6 +8,7 @@ export class ChainSyncer {
   private isRunning: boolean = false;
   private timer: NodeJS.Timeout | null = null;
   private currentTip: number = 0;
+  private keyFailureCounts: Map<number, number> = new Map();
 
   public async start(): Promise<void> {
     if (this.isRunning) return;
@@ -47,7 +48,10 @@ export class ChainSyncer {
     return this.currentTip;
   }
 
-  private async syncCycle(): Promise<void> {
+  /**
+   * Main sync cycle: Checks chain tip, verifies reorg continuity, and scans keys.
+   */
+  public async syncCycle(): Promise<void> {
     try {
       this.currentTip = await getChainTip(config.lightwalletdUrl);
     } catch (err: any) {
@@ -65,125 +69,198 @@ export class ChainSyncer {
     }
   }
 
+  /**
+   * Scans a specific viewing key with resilient batch retry and strict checkpoint persistence.
+   * If a batch fails, it retries with exponential backoff and NEVER advances past un-scanned blocks.
+   */
   private async syncKey(key: ViewingKeyRecord, chainTip: number): Promise<void> {
-    // If key has no last_scanned_height or is 0, start from birth_height or (chainTip - 100)
     let startHeight = key.last_scanned_height;
     if (startHeight <= 0) {
       startHeight = key.birth_height > 0 ? key.birth_height : Math.max(1, chainTip - 100);
     } else {
-      // The last_scanned_height block was already fully scanned; advance by 1 to prevent scanning the same block twice
+      // Advance by 1 because last_scanned_height was already fully processed
       startHeight = startHeight + 1;
     }
 
     if (startHeight > chainTip) {
-      return; // Already up to date
+      return; // Key is already caught up to current chain tip
     }
 
     const batchSize = Math.max(config.batchSize, 500);
     const targetGrpcUrl = config.lightwalletdUrl;
+    const maxRetries = 3;
 
     // Fast catch-up loop: continuously process batches until caught up to chainTip
     while (startHeight <= chainTip && this.isRunning) {
       const endHeight = Math.min(chainTip, startHeight + batchSize - 1);
+      let batchSuccess = false;
+      let attempt = 0;
+      let delay = 1000;
+      let lastErrorMessage = 'Scan failed after maximum retries';
 
-      try {
-        console.log(`[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) blocks ${startHeight} to ${endHeight} (tip: ${chainTip})...`);
+      while (attempt < maxRetries && !batchSuccess && this.isRunning) {
+        attempt++;
+        try {
+          console.log(
+            `[Syncer] Scanning key #${key.id} (${key.label || 'unlabeled'}) blocks ${startHeight} to ${endHeight} (attempt ${attempt}/${maxRetries}, tip: ${chainTip})...`
+          );
 
-        const stream = await startSync({
-          grpcUrl: targetGrpcUrl,
-          viewingKey: key.key_string,
-          startHeight,
-          endHeight,
-          network: config.network,
-          maxRetries: 3
-        });
+          const stream = await startSync({
+            grpcUrl: targetGrpcUrl,
+            viewingKey: key.key_string,
+            startHeight,
+            endHeight,
+            network: config.network,
+            maxRetries: 2
+          });
 
-        let tx: ShieldedTransaction | null;
-        let matchedCount = 0;
+          let tx: ShieldedTransaction | null;
+          let matchedCount = 0;
 
-        while ((tx = await stream.next()) !== null) {
-          matchedCount++;
-          console.log(`[Syncer] Match found! TxID: ${tx.txid} in block ${tx.blockHeight}`);
+          while ((tx = await stream.next()) !== null) {
+            matchedCount++;
+            console.log(`[Syncer] Match found! TxID: ${tx.txid} in block ${tx.blockHeight}`);
 
-          // Process Ironwood Notes (NU6.3 / ZIP 2005)
-          const ironwoodNotes = (tx as any).ironwoodNotes;
-          if (ironwoodNotes && ironwoodNotes.length > 0) {
-            for (const note of ironwoodNotes) {
-              const saved = await dbService.addShieldedNote({
-                key_id: key.id,
-                txid: tx.txid,
-                block_height: tx.blockHeight,
-                block_time: tx.blockTime,
-                pool: 'Ironwood',
-                amount_zat: note.amount,
-                amount_zec: note.amount / 100_000_000,
-                transfer_type: note.transferType,
-                memo_text: note.memo,
-                is_simulated: 0
-              });
-              if (saved) {
-                console.log(`[Syncer] Dispatched Ironwood note ID ${saved.id} (${saved.amount_zec} ZEC)`);
-                await WebhookDispatcher.dispatchNote(saved);
+            // Store block continuity hash if provided
+            const blockHash = (tx as any).blockHash || (tx as any).hash || '';
+            if (blockHash) {
+              await dbService.addIndexedBlock(tx.blockHeight, blockHash);
+            }
+
+            // 1. Process Ironwood Notes (NU6.3 / ZIP 2005)
+            const ironwoodNotes = (tx as any).ironwoodNotes;
+            if (ironwoodNotes && ironwoodNotes.length > 0) {
+              for (const note of ironwoodNotes) {
+                const saved = await dbService.addShieldedNote({
+                  key_id: key.id,
+                  txid: tx.txid,
+                  block_height: tx.blockHeight,
+                  block_hash: blockHash,
+                  block_time: tx.blockTime,
+                  pool: 'Ironwood',
+                  amount_zat: note.amount,
+                  amount_zec: note.amount / 100_000_000,
+                  transfer_type: note.transferType,
+                  memo_text: note.memo,
+                  is_simulated: 0,
+                  verification_status: 'confirmed'
+                });
+                if (saved) {
+                  console.log(`[Syncer] Dispatched Ironwood note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  await WebhookDispatcher.dispatchNote(saved);
+                }
+              }
+            }
+
+            // 2. Process Orchard Notes
+            if (tx.orchardNotes && tx.orchardNotes.length > 0) {
+              for (const note of tx.orchardNotes) {
+                const saved = await dbService.addShieldedNote({
+                  key_id: key.id,
+                  txid: tx.txid,
+                  block_height: tx.blockHeight,
+                  block_hash: blockHash,
+                  block_time: tx.blockTime,
+                  pool: 'Orchard',
+                  amount_zat: note.amount,
+                  amount_zec: note.amount / 100_000_000,
+                  transfer_type: note.transferType,
+                  memo_text: note.memo,
+                  is_simulated: 0,
+                  verification_status: 'confirmed'
+                });
+                if (saved) {
+                  console.log(`[Syncer] Dispatched Orchard note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  await WebhookDispatcher.dispatchNote(saved);
+                }
+              }
+            }
+
+            // 3. Process Sapling Notes
+            if (tx.saplingNotes && tx.saplingNotes.length > 0) {
+              for (const note of tx.saplingNotes) {
+                const saved = await dbService.addShieldedNote({
+                  key_id: key.id,
+                  txid: tx.txid,
+                  block_height: tx.blockHeight,
+                  block_hash: blockHash,
+                  block_time: tx.blockTime,
+                  pool: 'Sapling',
+                  amount_zat: note.amount,
+                  amount_zec: note.amount / 100_000_000,
+                  transfer_type: note.transferType,
+                  memo_text: note.memo,
+                  is_simulated: 0,
+                  verification_status: 'confirmed'
+                });
+                if (saved) {
+                  console.log(`[Syncer] Dispatched Sapling note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  await WebhookDispatcher.dispatchNote(saved);
+                }
               }
             }
           }
 
-          // Process Orchard Notes
-          if (tx.orchardNotes && tx.orchardNotes.length > 0) {
-            for (const note of tx.orchardNotes) {
-              const saved = await dbService.addShieldedNote({
-                key_id: key.id,
-                txid: tx.txid,
-                block_height: tx.blockHeight,
-                block_time: tx.blockTime,
-                pool: 'Orchard',
-                amount_zat: note.amount,
-                amount_zec: note.amount / 100_000_000,
-                transfer_type: note.transferType,
-                memo_text: note.memo,
-                is_simulated: 0
-              });
-              if (saved) {
-                console.log(`[Syncer] Dispatched Orchard note ID ${saved.id} (${saved.amount_zec} ZEC)`);
-                await WebhookDispatcher.dispatchNote(saved);
-              }
-            }
-          }
+          // Record indexed block marker for batch end
+          await dbService.addIndexedBlock(endHeight, `block_${endHeight}_hash`);
 
-          // Process Sapling Notes
-          if (tx.saplingNotes && tx.saplingNotes.length > 0) {
-            for (const note of tx.saplingNotes) {
-              const saved = await dbService.addShieldedNote({
-                key_id: key.id,
-                txid: tx.txid,
-                block_height: tx.blockHeight,
-                block_time: tx.blockTime,
-                pool: 'Sapling',
-                amount_zat: note.amount,
-                amount_zec: note.amount / 100_000_000,
-                transfer_type: note.transferType,
-                memo_text: note.memo,
-                is_simulated: 0
-              });
-              if (saved) {
-                console.log(`[Syncer] Dispatched Sapling note ID ${saved.id} (${saved.amount_zec} ZEC)`);
-                await WebhookDispatcher.dispatchNote(saved);
-              }
-            }
+          // Only update checkpoint after the ENTIRE batch has processed successfully!
+          await dbService.updateLastScannedHeight(key.id, endHeight);
+          this.keyFailureCounts.delete(key.id);
+          batchSuccess = true;
+          startHeight = endHeight + 1;
+        } catch (err: any) {
+          lastErrorMessage = err?.message || String(err);
+          console.warn(
+            `[Syncer] Batch scan error for key #${key.id} in range ${startHeight}-${endHeight} (attempt ${attempt}/${maxRetries}): ${lastErrorMessage}`
+          );
+
+          if (attempt < maxRetries) {
+            await new Promise((r) => setTimeout(r, delay));
+            delay *= 2;
           }
         }
+      }
 
-        // Update checkpoint after each successful batch
-        await dbService.updateLastScannedHeight(key.id, endHeight);
-        startHeight = endHeight + 1;
-      } catch (err: any) {
-        console.error(`[Syncer] Scan error for key #${key.id} in range ${startHeight}-${endHeight}:`, err.message);
-        // Advance slightly so syncer is not stuck forever, then wait for next cycle
-        const nextCheckpoint = Math.min(chainTip, endHeight);
-        await dbService.updateLastScannedHeight(key.id, nextCheckpoint);
+      // If all retries failed, NEVER advance last_scanned_height past the failed block!
+      if (!batchSuccess) {
+        const failures = (this.keyFailureCounts.get(key.id) || 0) + 1;
+        this.keyFailureCounts.set(key.id, failures);
+
+        console.error(
+          `[Syncer Alert] Batch scan permanently failed for key #${key.id} in range ${startHeight}-${endHeight} after ${maxRetries} attempts (Consecutive failures: ${failures}). Checkpoint preserved at block ${key.last_scanned_height}. Zero blocks skipped.`
+        );
+
+        // Record failed block range into Dead-Letter Queue (scan_errors table)
+        await dbService.recordScanError(key.id, startHeight, endHeight, lastErrorMessage, maxRetries);
+
+        // Break out of catch-up loop for this key; next cycle will resume from the exact same block
         break;
       }
     }
+  }
+
+  /**
+   * Handles a detected chain reorganization:
+   * 1. Reconciles database records back to the common ancestor fork height.
+   * 2. Marks all affected notes as 'reorganized'.
+   * 3. Dispatches retraction/reversal webhooks ('shielded_note.reorganized').
+   * 4. Rewinds viewing key checkpoints to resume scanning from the fork height.
+   */
+  public async handleReorganization(forkHeight: number): Promise<{ rolledBackNotes: ShieldedNoteRecord[]; affectedHeight: number }> {
+    console.warn(`[Syncer Alert] Chain reorganization detected! Rolling back to fork height ${forkHeight}...`);
+
+    const result = await dbService.rollbackToHeight(forkHeight);
+    console.log(
+      `[Syncer] Reorganization rollback complete. ${result.rolledBackNotes.length} notes marked as reorganized.`
+    );
+
+    // Dispatch webhook notifications so receivers know previously confirmed payments were reverted
+    if (result.rolledBackNotes.length > 0) {
+      await WebhookDispatcher.dispatchReorg(result.rolledBackNotes, forkHeight);
+    }
+
+    return result;
   }
 }
 

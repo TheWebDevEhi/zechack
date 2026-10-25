@@ -17,6 +17,7 @@ export interface AppConfig {
   readApiKey?: string;
   encryptionKey: string;
   allowHttpWebhooks: boolean;
+  allowLocalhostWebhooks: boolean;
 }
 
 const isMainnet = process.env.NETWORK === 'mainnet';
@@ -36,4 +37,5 @@ export const config: AppConfig = {
   readApiKey: process.env.READ_API_KEY || undefined,
   encryptionKey: process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_SECRET || 'zecshield_master_encryption_key_32_bytes!!',
   allowHttpWebhooks: process.env.ALLOW_HTTP_WEBHOOKS === 'true' || nodeEnv === 'development' || nodeEnv === 'test',
+  allowLocalhostWebhooks: process.env.ALLOW_LOCALHOST_WEBHOOKS === 'true' || nodeEnv === 'test',
 };
