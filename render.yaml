@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: zecshield-gateway
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NETWORK
+        value: testnet
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: ALLOW_HTTP_WEBHOOKS
+        value: "false"
+      - key: TRUST_PROXY
+        value: "true"

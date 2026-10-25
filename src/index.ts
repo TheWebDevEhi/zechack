@@ -15,8 +15,8 @@ async function bootstrap() {
 
   // 2. Start Express API Server
   const app = createApp();
-  const server = app.listen(config.port, () => {
-    console.log(`[API] Server listening on http://localhost:${config.port}`);
+  const server = app.listen(config.port, '0.0.0.0', () => {
+    console.log(`[API] Server listening on http://0.0.0.0:${config.port}`);
     console.log(`[API] Network: ${config.network.toUpperCase()} (${config.lightwalletdUrl})`);
   });
 

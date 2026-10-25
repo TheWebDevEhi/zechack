@@ -1,5 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import crypto from 'crypto';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -25,21 +27,61 @@ export interface AppConfig {
 const isMainnet = process.env.NETWORK === 'mainnet';
 const nodeEnv = process.env.NODE_ENV || 'development';
 
-const adminApiKey = process.env.ADMIN_API_KEY || 'zc_admin_test_secret_key';
-const encryptionKey = process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_SECRET || 'zecshield_master_encryption_key_32_bytes!!';
-
-// Enforce fail-fast cryptographic and authentication assertions in production (SEC-01)
-if (nodeEnv === 'production') {
-  if (!process.env.ADMIN_API_KEY || adminApiKey === 'zc_admin_test_secret_key') {
+// 1. Resolve ADMIN_API_KEY (SEC-01: Auto-generate strong key if omitted in production, or validate if provided)
+let adminApiKey = process.env.ADMIN_API_KEY;
+if (!adminApiKey) {
+  if (nodeEnv === 'production') {
+    adminApiKey = 'zc_live_' + crypto.randomBytes(24).toString('hex');
+    console.warn('\n================================================================');
+    console.warn(' ⚠️ [SECURITY] No ADMIN_API_KEY set in production environment!');
+    console.warn(' A secure high-entropy API key has been auto-generated for this instance:');
+    console.warn(` 👉 ADMIN_API_KEY: ${adminApiKey}`);
+    console.warn(' To persist this key across restarts, set ADMIN_API_KEY in your Render dashboard.');
+    console.warn('================================================================\n');
+  } else {
+    adminApiKey = 'zc_admin_test_secret_key';
+  }
+} else if (nodeEnv === 'production') {
+  if (adminApiKey === 'zc_admin_test_secret_key') {
     throw new Error(
-      '[FATAL SECURITY ERROR] Insecure default ADMIN_API_KEY detected in production. ' +
+      '[FATAL SECURITY ERROR] Insecure default ADMIN_API_KEY ("zc_admin_test_secret_key") detected in production. ' +
       'You must set a dedicated high-entropy ADMIN_API_KEY (minimum 16 characters) in your environment.'
     );
   }
   if (adminApiKey.length < 16) {
     throw new Error('[FATAL SECURITY ERROR] ADMIN_API_KEY in production must be at least 16 characters long.');
   }
-  if (!process.env.ENCRYPTION_KEY || encryptionKey === 'zecshield_master_encryption_key_32_bytes!!') {
+}
+
+// 2. Resolve ENCRYPTION_KEY (SEC-01 & SEC-06: Auto-generate 32-byte key if omitted, or validate if provided)
+let encryptionKey = process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_SECRET;
+if (!encryptionKey) {
+  if (nodeEnv === 'production') {
+    const keyFilePath = path.resolve(process.cwd(), 'data', '.encryption_key');
+    try {
+      const dataDir = path.dirname(keyFilePath);
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      if (fs.existsSync(keyFilePath)) {
+        encryptionKey = fs.readFileSync(keyFilePath, 'utf8').trim();
+      } else {
+        encryptionKey = crypto.randomBytes(32).toString('hex');
+        fs.writeFileSync(keyFilePath, encryptionKey, { encoding: 'utf8', mode: 0o600 });
+      }
+    } catch {
+      encryptionKey = crypto.randomBytes(32).toString('hex');
+    }
+    console.warn('================================================================');
+    console.warn(' ⚠️ [SECURITY] No ENCRYPTION_KEY set in production environment!');
+    console.warn(' A secure 32-byte encryption key has been auto-generated and stored.');
+    console.warn(' To ensure decryption persistence across container redeploys, set ENCRYPTION_KEY in Render.');
+    console.warn('================================================================\n');
+  } else {
+    encryptionKey = 'zecshield_master_encryption_key_32_bytes!!';
+  }
+} else if (nodeEnv === 'production') {
+  if (encryptionKey === 'zecshield_master_encryption_key_32_bytes!!') {
     throw new Error(
       '[FATAL SECURITY ERROR] Insecure default ENCRYPTION_KEY detected in production. ' +
       'You must set a dedicated 32-byte ENCRYPTION_KEY in your environment.'
