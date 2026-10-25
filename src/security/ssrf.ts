@@ -1,10 +1,12 @@
 import dns from 'dns';
+import net from 'net';
 import { URL } from 'url';
 
 /**
  * Checks whether an IPv4 address belongs to a reserved, private, loopback, or cloud-metadata range.
  */
 function isRestrictedIpv4(ip: string, allowLocalhost: boolean = false): boolean {
+  if (!net.isIPv4(ip)) return false;
   const parts = ip.split('.').map((p) => parseInt(p, 10));
   if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
     return true; // malformed treated as restricted
@@ -63,6 +65,7 @@ function isRestrictedIpv4(ip: string, allowLocalhost: boolean = false): boolean 
  * Checks whether an IPv6 address belongs to a reserved, private, or loopback range.
  */
 function isRestrictedIpv6(ip: string, allowLocalhost: boolean = false): boolean {
+  if (!net.isIPv6(ip)) return false;
   const normalized = ip.toLowerCase();
 
   // Loopback / Unspecified

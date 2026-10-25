@@ -130,10 +130,11 @@ export class ChainSyncer {
             // 1. Process Ironwood Notes (NU6.3 / ZIP 2005)
             const ironwoodNotes = (tx as any).ironwoodNotes;
             if (ironwoodNotes && ironwoodNotes.length > 0) {
-              for (const note of ironwoodNotes) {
+              for (const [idx, note] of ironwoodNotes.entries()) {
                 const saved = await dbService.addShieldedNote({
                   key_id: key.id,
                   txid: tx.txid,
+                  output_index: (note as any).outputIndex ?? (note as any).actionIndex ?? idx,
                   block_height: tx.blockHeight,
                   block_hash: blockHash,
                   block_time: tx.blockTime,
@@ -146,7 +147,7 @@ export class ChainSyncer {
                   verification_status: 'confirmed'
                 });
                 if (saved) {
-                  console.log(`[Syncer] Dispatched Ironwood note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  console.log(`[Syncer] Dispatched Ironwood note ID ${saved.id} (output #${saved.output_index ?? idx}, ${saved.amount_zec} ZEC)`);
                   await WebhookDispatcher.dispatchNote(saved);
                 }
               }
@@ -154,10 +155,11 @@ export class ChainSyncer {
 
             // 2. Process Orchard Notes
             if (tx.orchardNotes && tx.orchardNotes.length > 0) {
-              for (const note of tx.orchardNotes) {
+              for (const [idx, note] of tx.orchardNotes.entries()) {
                 const saved = await dbService.addShieldedNote({
                   key_id: key.id,
                   txid: tx.txid,
+                  output_index: (note as any).outputIndex ?? (note as any).actionIndex ?? idx,
                   block_height: tx.blockHeight,
                   block_hash: blockHash,
                   block_time: tx.blockTime,
@@ -170,7 +172,7 @@ export class ChainSyncer {
                   verification_status: 'confirmed'
                 });
                 if (saved) {
-                  console.log(`[Syncer] Dispatched Orchard note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  console.log(`[Syncer] Dispatched Orchard note ID ${saved.id} (output #${saved.output_index ?? idx}, ${saved.amount_zec} ZEC)`);
                   await WebhookDispatcher.dispatchNote(saved);
                 }
               }
@@ -178,10 +180,11 @@ export class ChainSyncer {
 
             // 3. Process Sapling Notes
             if (tx.saplingNotes && tx.saplingNotes.length > 0) {
-              for (const note of tx.saplingNotes) {
+              for (const [idx, note] of tx.saplingNotes.entries()) {
                 const saved = await dbService.addShieldedNote({
                   key_id: key.id,
                   txid: tx.txid,
+                  output_index: (note as any).outputIndex ?? (note as any).actionIndex ?? idx,
                   block_height: tx.blockHeight,
                   block_hash: blockHash,
                   block_time: tx.blockTime,
@@ -194,7 +197,7 @@ export class ChainSyncer {
                   verification_status: 'confirmed'
                 });
                 if (saved) {
-                  console.log(`[Syncer] Dispatched Sapling note ID ${saved.id} (${saved.amount_zec} ZEC)`);
+                  console.log(`[Syncer] Dispatched Sapling note ID ${saved.id} (output #${saved.output_index ?? idx}, ${saved.amount_zec} ZEC)`);
                   await WebhookDispatcher.dispatchNote(saved);
                 }
               }

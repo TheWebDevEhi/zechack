@@ -21,6 +21,7 @@ export interface ShieldedNoteRecord {
   id: number;
   key_id: number;
   txid: string;
+  output_index?: number;
   block_height: number;
   block_hash?: string;
   block_time: number;
@@ -131,6 +132,7 @@ export class DatabaseService {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key_id INTEGER NOT NULL,
         txid TEXT NOT NULL,
+        output_index INTEGER DEFAULT 0,
         block_height INTEGER NOT NULL,
         block_time INTEGER NOT NULL,
         pool TEXT NOT NULL,
@@ -141,7 +143,7 @@ export class DatabaseService {
         is_simulated INTEGER NOT NULL DEFAULT 0,
         verification_status TEXT NOT NULL DEFAULT 'confirmed',
         created_at INTEGER NOT NULL,
-        UNIQUE(key_id, txid, pool, amount_zat) ON CONFLICT IGNORE
+        UNIQUE(key_id, txid, pool, amount_zat, output_index) ON CONFLICT IGNORE
       );
 
       CREATE TABLE IF NOT EXISTS webhooks (
@@ -192,6 +194,9 @@ export class DatabaseService {
     } catch {}
     try {
       await this.client.execute('ALTER TABLE shielded_notes ADD COLUMN block_hash TEXT');
+    } catch {}
+    try {
+      await this.client.execute('ALTER TABLE shielded_notes ADD COLUMN output_index INTEGER DEFAULT 0');
     } catch {}
   }
 
@@ -295,15 +300,18 @@ export class DatabaseService {
     const now = Math.floor(Date.now() / 1000);
     const verificationStatus = note.verification_status || (note.is_simulated ? 'simulated' : 'confirmed');
 
+    const outputIndex = note.output_index ?? 0;
+
     const insertRes = await this.client.execute({
       sql: `
         INSERT OR IGNORE INTO shielded_notes 
-        (key_id, txid, block_height, block_hash, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, verification_status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (key_id, txid, output_index, block_height, block_hash, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, verification_status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         note.key_id,
         note.txid,
+        outputIndex,
         note.block_height,
         note.block_hash || '',
         note.block_time,
@@ -323,10 +331,20 @@ export class DatabaseService {
       return null;
     }
 
-    // Query back the newly inserted note
+    // Query back the newly inserted note using lastInsertRowid if available
+    if (insertRes.lastInsertRowid) {
+      const q = await this.client.execute({
+        sql: 'SELECT * FROM shielded_notes WHERE id = ? LIMIT 1',
+        args: [insertRes.lastInsertRowid]
+      });
+      if (q.rows.length > 0) {
+        return q.rows[0] as unknown as ShieldedNoteRecord;
+      }
+    }
+
     const q = await this.client.execute({
-      sql: 'SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ? AND amount_zat = ? LIMIT 1',
-      args: [note.key_id, note.txid, note.pool, note.amount_zat]
+      sql: 'SELECT * FROM shielded_notes WHERE key_id = ? AND txid = ? AND pool = ? AND amount_zat = ? AND output_index = ? LIMIT 1',
+      args: [note.key_id, note.txid, note.pool, note.amount_zat, outputIndex]
     });
 
     if (q.rows.length > 0) {

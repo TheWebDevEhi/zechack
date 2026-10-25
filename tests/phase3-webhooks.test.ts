@@ -162,6 +162,74 @@ describe('Phase 3 Webhook Delivery & Multi-Note Deduplication Tests', () => {
       assert.notStrictEqual(delivery1.body.event_id, delivery2.body.event_id);
     });
 
+    test('A transaction containing 3 notes (including identical amounts differentiated by output_index) dispatches all notes independently via dispatchNotes', async () => {
+      receivedRequests.length = 0;
+      const key = (await dbService.getViewingKeys())[0];
+      const tripleTxid = 'f1f2f3f4f5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f91';
+
+      // Note A: 0.5 ZEC, output_index 0
+      const noteA = await dbService.addShieldedNote({
+        key_id: key.id,
+        txid: tripleTxid,
+        output_index: 0,
+        block_height: 4000050,
+        block_time: Math.floor(Date.now() / 1000),
+        pool: 'Orchard',
+        amount_zat: 50_000_000,
+        amount_zec: 0.5,
+        transfer_type: 'incoming',
+        memo_text: 'Batch payout output 0',
+        is_simulated: 0,
+        verification_status: 'confirmed'
+      });
+      assert.ok(noteA);
+
+      // Note B: Identical 0.5 ZEC and Orchard pool, but output_index 1
+      const noteB = await dbService.addShieldedNote({
+        key_id: key.id,
+        txid: tripleTxid,
+        output_index: 1,
+        block_height: 4000050,
+        block_time: Math.floor(Date.now() / 1000),
+        pool: 'Orchard',
+        amount_zat: 50_000_000,
+        amount_zec: 0.5,
+        transfer_type: 'incoming',
+        memo_text: 'Batch payout output 1',
+        is_simulated: 0,
+        verification_status: 'confirmed'
+      });
+      assert.ok(noteB);
+
+      // Note C: 1.0 ZEC in Sapling pool, output_index 0
+      const noteC = await dbService.addShieldedNote({
+        key_id: key.id,
+        txid: tripleTxid,
+        output_index: 0,
+        block_height: 4000050,
+        block_time: Math.floor(Date.now() / 1000),
+        pool: 'Sapling',
+        amount_zat: 100_000_000,
+        amount_zec: 1.0,
+        transfer_type: 'incoming',
+        memo_text: 'Batch payout output 2 (Sapling)',
+        is_simulated: 0,
+        verification_status: 'confirmed'
+      });
+      assert.ok(noteC);
+
+      // Dispatch all 3 notes via WebhookDispatcher.dispatchNotes
+      await WebhookDispatcher.dispatchNotes([noteA, noteB, noteC]);
+
+      assert.strictEqual(receivedRequests.length, 3, 'All 3 notes in transaction must trigger separate webhook deliveries');
+      assert.strictEqual(receivedRequests[0].body.data.output_index, 0);
+      assert.strictEqual(receivedRequests[1].body.data.output_index, 1);
+      assert.strictEqual(receivedRequests[2].body.data.output_index, 0);
+      assert.strictEqual(receivedRequests[0].body.data.amount_zec, 0.5);
+      assert.strictEqual(receivedRequests[1].body.data.amount_zec, 0.5);
+      assert.strictEqual(receivedRequests[2].body.data.amount_zec, 1.0);
+    });
+
     test('Exact duplicate note re-dispatch is deduplicated', async () => {
       const initialCount = receivedRequests.length;
 

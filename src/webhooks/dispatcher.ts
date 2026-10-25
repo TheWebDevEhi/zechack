@@ -32,6 +32,7 @@ export class WebhookDispatcher {
         note_id: note.id,
         key_id: note.key_id,
         txid: note.txid,
+        output_index: note.output_index ?? 0,
         block_height: note.block_height,
         block_time: note.block_time,
         pool: note.pool,
@@ -70,6 +71,15 @@ export class WebhookDispatcher {
       }
 
       await this.sendWithRetry(webhook, note.id, payloadJson, eventName, isSimulated, timestamp, eventId, 3);
+    }
+  }
+
+  /**
+   * Dispatches multiple notes in a batch sequentially.
+   */
+  public static async dispatchNotes(notes: ShieldedNoteRecord[]): Promise<void> {
+    for (const note of notes) {
+      await this.dispatchNote(note);
     }
   }
 

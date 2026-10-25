@@ -2,9 +2,13 @@ import http from 'http';
 import crypto from 'crypto';
 import { createApp } from '../src/api/server.js';
 import { dbService } from '../src/db/database.js';
+import { config } from '../src/config.js';
 
 async function verifyMilestone3() {
   console.log('=== Milestone 3 Live Webhook & HMAC Verification ===\n');
+
+  config.allowHttpWebhooks = true;
+  config.allowLocalhostWebhooks = true;
 
   const WEBHOOK_PORT = 3088;
   const API_PORT = 3089;
@@ -65,21 +69,30 @@ async function verifyMilestone3() {
     console.log('[3/4] Registering webhook via POST /api/v1/webhooks...');
     const regRes = await fetch(`http://localhost:${API_PORT}/api/v1/webhooks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.adminApiKey
+      },
       body: JSON.stringify({
         target_url: `http://localhost:${WEBHOOK_PORT}/webhook`,
         secret: SECRET,
         description: 'Local Live Verifier'
       })
     });
-    const regData = await regRes.json();
-    console.log('      Webhook registered with ID:', regData.webhook.id);
+    const regData: any = await regRes.json();
+    if (!regRes.ok) {
+      console.error('Registration failed HTTP', regRes.status, regData);
+    }
+    console.log('      Webhook registered with ID:', regData.webhook?.id);
 
     // 4. Trigger Note via Simulator
     console.log('\n[4/4] Triggering note detection to test live dispatch...');
     const simRes = await fetch(`http://localhost:${API_PORT}/api/v1/simulator/simulate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.adminApiKey
+      },
       body: JSON.stringify({
         amount_zec: 3.14159,
         memo: 'Payment for Hackathon License #HMAC-VERIFIED',
@@ -106,7 +119,9 @@ async function verifyMilestone3() {
     console.log('Decrypted Memo received:', `"${delivery.body.data.memo}"`);
 
     // Verify delivery logged in DB
-    const deliveriesRes = await fetch(`http://localhost:${API_PORT}/api/v1/webhooks/deliveries`);
+    const deliveriesRes = await fetch(`http://localhost:${API_PORT}/api/v1/webhooks/deliveries`, {
+      headers: { 'X-API-Key': config.adminApiKey }
+    });
     const deliveriesData = await deliveriesRes.json();
     const lastDelivery = deliveriesData.deliveries[0];
     console.log('\nDatabase Delivery Log:');
