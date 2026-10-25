@@ -122,6 +122,13 @@ export class WebhookDispatcher {
     }
   }
 
+  private static sanitizeDeliveryResponse(body: string): string {
+    if (!body) return '';
+    return body
+      .slice(0, 500)
+      .replace(/(Bearer\s+[A-Za-z0-9_\-\.]+)|(whsec_[A-Za-z0-9]+)|(zc_admin_[A-Za-z0-9_]+)|((?:password|secret|token)["']?\s*[:=]\s*["']?)[^"',\s}]+/gi, '$4[REDACTED]');
+  }
+
   private static async sendWithRetry(
     webhook: WebhookRecord,
     noteId: number,
@@ -143,6 +150,20 @@ export class WebhookDispatcher {
     while (attempt < maxRetries) {
       attempt++;
       try {
+        // Re-verify SSRF right before connection to defend against rapid DNS rebinding (SEC-03)
+        const preFlightCheck = await validateWebhookUrl(webhook.target_url, config.allowHttpWebhooks, config.allowLocalhostWebhooks);
+        if (!preFlightCheck.isValid) {
+          console.warn(`[Webhook] Pre-flight SSRF check failed for #${webhook.id}: ${preFlightCheck.error}`);
+          await dbService.logWebhookDelivery(
+            webhook.id,
+            noteId,
+            payloadJson,
+            0,
+            `Blocked by pre-flight SSRF policy: ${preFlightCheck.error}`
+          );
+          return;
+        }
+
         const response = await fetch(webhook.target_url, {
           method: 'POST',
           headers: {
@@ -155,7 +176,7 @@ export class WebhookDispatcher {
             'User-Agent': 'ZecShield-Webhook-Dispatcher/1.0'
           },
           body: payloadJson,
-          redirect: 'error', // Defend against DNS rebinding / redirect SSRF bypasses
+          redirect: 'error', // Defend against redirect SSRF bypasses
           signal: AbortSignal.timeout(10000) // 10s timeout
         });
 
@@ -165,7 +186,7 @@ export class WebhookDispatcher {
           noteId,
           payloadJson,
           response.status,
-          responseText.slice(0, 500)
+          this.sanitizeDeliveryResponse(responseText)
         );
 
         if (response.ok) {
@@ -181,7 +202,7 @@ export class WebhookDispatcher {
           noteId,
           payloadJson,
           0,
-          `Error: ${err.message}`.slice(0, 500)
+          this.sanitizeDeliveryResponse(`Error: ${err.message}`)
         );
       }
 

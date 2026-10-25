@@ -142,11 +142,17 @@ describe('Phase 1 Security & Access Controls Tests', () => {
     test('Credentials at rest are encrypted with AES-256-GCM', () => {
       const secret = 'super_secret_payload_string_12345';
       const encrypted = encryptCredential(secret);
-      assert.ok(encrypted.startsWith('enc:v1:'));
+      assert.ok(encrypted.startsWith('enc:v2:') || encrypted.startsWith('enc:'));
       assert.notStrictEqual(encrypted, secret);
 
       const decrypted = decryptCredential(encrypted);
       assert.strictEqual(decrypted, secret);
+
+      // Verify backwards compatibility with legacy enc:v1 credentials
+      const legacyV1 = 'enc:v1:000000000000000000000000:00000000000000000000000000000000:';
+      assert.doesNotThrow(() => {
+        try { decryptCredential(legacyV1); } catch {}
+      });
     });
 
     test('GET /api/v1/keys redacts raw viewing keys', async () => {

@@ -10,18 +10,20 @@ This operational runbook provides production-grade architectural guidance, secre
 
 | Variable | Required | Default | Description | Security Guardrails |
 | :--- | :--- | :--- | :--- | :--- |
-| `NODE_ENV` | Yes | `production` | Node environment runtime | Must be `production` to prevent debug leakage. |
-| `ADMIN_API_KEY` | **Yes** | *None* | Master admin authentication token | High entropy (>= 32 chars). Controls key registration, webhook management, purge, and reorg endpoints. |
+| `NODE_ENV` | Yes | `production` | Node environment runtime | Must be `production` to prevent debug leakage. Triggers fail-fast security assertions. |
+| `ADMIN_API_KEY` | **Yes** | *None* | Master admin authentication token | High entropy (>= 16 chars). Controls key registration, webhook management, purge, and reorg endpoints. |
 | `READ_API_KEY` | Optional | *None* | Read-only telemetry and query token | Permits access to `/api/v1/status`, `/api/v1/transactions`, `/api/v1/keys`, `/api/v1/syncer/errors`. |
-| `ENCRYPTION_KEY` | **Yes** | *None* | 32-byte secret key for AES-256-GCM | Encrypts viewing keys and webhook secrets at rest before storing in SQLite/Turso. |
+| `ENCRYPTION_KEY` | **Yes** | *None* | 32-byte secret key for AES-256-GCM | Master key used with HKDF to derive credential encryption keys at rest. |
 | `ALLOW_HTTP_WEBHOOKS` | No | `false` | Permits plaintext HTTP webhooks | **Must remain `false` in production.** Only set to `true` for localized air-gapped test environments. |
+| `CORS_ORIGIN` | Optional | *Localhost* | Whitelisted CORS origins | Comma-separated list of permitted origins (e.g., `https://dashboard.domain.com`). |
+| `TRUST_PROXY` | Optional | `false` | Express trust proxy setting | Set to `1` or `true` when deployed behind AWS ALB, Cloudflare, or Nginx. |
 | `TURSO_DATABASE_URL` | Optional | *Local SQLite* | LibSQL remote cluster endpoint | Use TLS connection strings (`libsql://...`). |
 | `TURSO_AUTH_TOKEN` | Optional | *None* | JWT authentication token for Turso | Store in vault/secrets manager; rotate quarterly. |
 | `LIGHTWALLETD_URL` | Yes | `https://na.zec.rocks:443` | Lightwalletd gRPC endpoint | Enforce TLS gRPC (`:443`) over public networks. |
 
 ### 1.2 Secret Storage Best Practices
 - **No plaintext credentials**: Never commit `.env` or configuration secrets to version control.
-- **Envelope encryption at rest**: All user viewing keys (`UFVK`, `Unified`, `Sapling`) and webhook secrets (`whsec_...`) are automatically encrypted using AES-256-GCM with unique 96-bit IVs and 128-bit authentication tags (`enc:v1:<iv>:<ciphertext>:<tag>`).
+- **Envelope encryption at rest**: All user viewing keys (`UFVK`, `Unified`, `Sapling`) and webhook secrets (`whsec_...`) are automatically encrypted using AES-256-GCM with RFC 5869 HKDF key derivation, random 128-bit salt, and 96-bit IVs (`enc:v2:<salt>:<iv>:<tag>:<ciphertext>`). Legacy `enc:v1:` ciphertexts remain supported for seamless backward compatibility.
 - **Blind indexing**: The database indexes keys via SHA-256 hashes (`key_hash`). Plaintext keys are never stored, never queried in plaintext, and never returned in API payloads.
 
 ---

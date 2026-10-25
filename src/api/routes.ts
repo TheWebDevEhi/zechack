@@ -14,7 +14,8 @@ import {
   validateAmountZec,
   validatePool,
   validatePagination,
-  validateViewingKeyInput
+  validateViewingKeyInput,
+  validateMemo
 } from '../security/validation.js';
 import { createRateLimiter } from '../security/rate-limit.js';
 
@@ -216,6 +217,11 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), writeLimit
       return res.status(400).json({ error: poolVal.error });
     }
 
+    const memoVal = validateMemo(memo);
+    if (!memoVal.isValid) {
+      return res.status(400).json({ error: memoVal.error });
+    }
+
     const cleanTxid = txidVal.value!;
     // On-chain verification guard
     if (verify_on_chain === true || config.nodeEnv === 'production') {
@@ -238,7 +244,7 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), writeLimit
       amount_zat: zat,
       amount_zec: amount,
       transfer_type: 'incoming',
-      memo_text: memo || '',
+      memo_text: memoVal.value || '',
       is_simulated: 0,
       verification_status: 'confirmed'
     });
@@ -349,10 +355,16 @@ apiRouter.post('/simulator/simulate', requireAuth('admin'), writeLimiter, async 
       return res.status(400).json({ error: poolVal.error });
     }
 
+    const memoInput = memo !== undefined ? memo : 'Hackathon Demo Payment - Invoice #ZEC-9901';
+    const memoVal = validateMemo(memoInput);
+    if (!memoVal.isValid) {
+      return res.status(400).json({ error: memoVal.error });
+    }
+
     const note = await PaymentSimulator.simulatePayment({
       keyId: key_id ? parseInt(key_id, 10) : undefined,
       amountZec: amountVal.value!,
-      memo: memo !== undefined ? memo : 'Hackathon Demo Payment - Invoice #ZEC-9901',
+      memo: memoVal.value!,
       pool: poolVal.value!,
       transferType: transfer_type || 'incoming',
       txid: txid || undefined,
@@ -428,6 +440,7 @@ apiRouter.post('/syncer/errors/:id/resolve', requireAuth('admin'), writeLimiter,
 // --- Ephemeral Wallet Pairing Sessions (Protected) ---
 interface WalletPairSession {
   sessionId: string;
+  token: string;
   createdAt: number;
   expiresAt: number;
   status: 'pending' | 'approved' | 'rejected';
@@ -449,11 +462,13 @@ function cleanupSessions() {
 apiRouter.post('/wallet-pair/session', requireAuth('admin'), writeLimiter, (req: Request, res: Response) => {
   cleanupSessions();
   const sessionId = 'zpair_' + crypto.randomBytes(12).toString('hex');
+  const token = crypto.randomBytes(16).toString('hex');
   const now = Date.now();
   const expiresAt = now + 5 * 60 * 1000; // 5 minutes validity
 
   const session: WalletPairSession = {
     sessionId,
+    token,
     createdAt: now,
     expiresAt,
     status: 'pending'
@@ -463,11 +478,13 @@ apiRouter.post('/wallet-pair/session', requireAuth('admin'), writeLimiter, (req:
 
   res.json({
     session_id: sessionId,
+    token,
     expires_at: expiresAt,
     qr_payload: JSON.stringify({
       app: 'ZecShield Gateway',
       action: 'connect_wallet',
       session_id: sessionId,
+      token,
       network: config.network,
       endpoint: `${req.protocol}://${req.get('host')}/api/wallet-pair/session/${sessionId}/approve`
     })
@@ -484,10 +501,16 @@ apiRouter.get('/wallet-pair/session/:id', readLimiter, (req: Request, res: Respo
     return res.status(404).json({ error: 'Session not found or expired', status: 'expired' });
   }
 
+  // Only return detailed key metadata if the client provides the correct challenge token (SEC-02)
+  const providedToken = req.header('x-pairing-token') || (req.query.token as string);
+  const isAuthorized = typeof providedToken === 'string' &&
+    providedToken.length === session.token.length &&
+    crypto.timingSafeEqual(Buffer.from(providedToken), Buffer.from(session.token));
+
   res.json({
     session_id: session.sessionId,
     status: session.status,
-    key: session.key ? sanitizeViewingKey(session.key) : null
+    key: isAuthorized && session.key ? sanitizeViewingKey(session.key) : null
   });
 });
 
@@ -499,6 +522,19 @@ apiRouter.post('/wallet-pair/session/:id/approve', writeLimiter, async (req: Req
 
   if (!session) {
     return res.status(404).json({ error: 'Session not found or expired' });
+  }
+
+  // Enforce cryptographic challenge-response token authentication (SEC-02)
+  const providedToken = req.header('x-pairing-token') || req.body?.token || (req.query.token as string);
+  const isAuthorized = typeof providedToken === 'string' &&
+    providedToken.length === session.token.length &&
+    crypto.timingSafeEqual(Buffer.from(providedToken), Buffer.from(session.token));
+
+  if (!isAuthorized) {
+    return res.status(401).json({
+      error: 'Unauthorized: Invalid or missing pairing challenge token. ' +
+             'Provide the token issued during session creation via "X-Pairing-Token" header or "token" body field.'
+    });
   }
 
   const { key, label, birth_height, key_type } = req.body;

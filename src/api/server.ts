@@ -3,11 +3,46 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { apiRouter } from './routes.js';
+import { config } from '../config.js';
 
 export function createApp(): express.Application {
   const app = express();
 
-  app.use(cors());
+  // Configure reverse proxy trust if specified (SEC-08)
+  if (config.trustProxy) {
+    app.set('trust proxy', config.trustProxy);
+  }
+
+  // Defensive HTTP Security Headers (SEC-04)
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '0');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (config.nodeEnv === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
+
+  // Strict CORS policy (SEC-04)
+  const allowedOrigins = config.corsOrigin
+    ? config.corsOrigin.split(',').map((o) => o.trim())
+    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:5173'];
+
+  app.use(cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      if (config.nodeEnv !== 'production' || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS origin "${origin}" not allowed by policy`), false);
+    },
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Pairing-Token']
+  }));
   app.use(express.json({ limit: '100kb' }));
 
   // Handle JSON parse error safely

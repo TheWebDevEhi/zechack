@@ -155,18 +155,27 @@ export class ProtocolAdapterProxy {
         this.upstream.GetLatestBlock(call.request, callback);
       },
       GetBlock: (call: any, callback: any) => {
-        this.upstream.GetBlock(call.request, callback);
+        this.upstream.GetBlock(call.request, (err: any, block: any) => {
+          if (err) return callback(err);
+          callback(null, transformBlock(block));
+        });
       },
       GetBlockRange: (call: any) => {
         const upstreamStream = this.upstream.GetBlockRange(call.request);
         upstreamStream.on('data', (block: any) => {
-          call.write(block);
+          call.write(transformBlock(block));
         });
         upstreamStream.on('end', () => call.end());
         upstreamStream.on('error', (err: any) => call.destroy(err));
       },
       GetTransaction: (call: any, callback: any) => {
-        this.upstream.GetTransaction(call.request, callback);
+        this.upstream.GetTransaction(call.request, (err: any, resp: any) => {
+          if (err) return callback(err);
+          if (resp && resp.data && Buffer.isBuffer(resp.data)) {
+            resp.data = transformV6toV5(resp.data, config.network);
+          }
+          callback(null, resp);
+        });
       },
       GetLightdInfo: (call: any, callback: any) => {
         this.upstream.GetLightdInfo(call.request, callback);

@@ -128,8 +128,35 @@ export default function App() {
 
 
 
+  // API Authentication Key state for gateway access (APP-01)
+  const [apiKey, setApiKey] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('zecshield_api_key') || 'zc_admin_test_secret_key';
+    }
+    return 'zc_admin_test_secret_key';
+  });
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+  const [tempApiKey, setTempApiKey] = useState<string>(apiKey);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('zecshield_api_key', apiKey);
+    }
+  }, [apiKey]);
+
+  // Authenticated fetch wrapper attaching X-API-Key header to protected gateway routes
+  const apiFetch = (url: string, options: RequestInit = {}) => {
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> || {}),
+    };
+    if (apiKey.trim()) {
+      headers['X-API-Key'] = apiKey.trim();
+    }
+    return fetch(url, { ...options, headers });
+  };
+
   // Mobile QR pairing state
-  const [mobileSession, setMobileSession] = useState<{ sessionId: string; qrPayload: string; expiresAt: number } | null>(null);
+  const [mobileSession, setMobileSession] = useState<{ sessionId: string; token: string; qrPayload: string; expiresAt: number } | null>(null);
   const [mobilePairStatus, setMobilePairStatus] = useState<'idle' | 'waiting' | 'approved' | 'expired'>('idle');
   const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pollingTimerRef = useRef<any>(null);
@@ -152,11 +179,11 @@ export default function App() {
     setIsRefreshing(true);
     try {
       const [statusRes, keysRes, txRes, webhooksRes, deliveriesRes] = await Promise.all([
-        fetch('/api/v1/status').then((r) => r.json()).catch(() => null),
-        fetch('/api/v1/keys').then((r) => r.json()).catch(() => null),
-        fetch('/api/v1/transactions').then((r) => r.json()).catch(() => null),
-        fetch('/api/v1/webhooks').then((r) => r.json()).catch(() => null),
-        fetch('/api/v1/webhooks/deliveries').then((r) => r.json()).catch(() => null),
+        apiFetch('/api/v1/status').then((r) => r.json()).catch(() => null),
+        apiFetch('/api/v1/keys').then((r) => r.json()).catch(() => null),
+        apiFetch('/api/v1/transactions').then((r) => r.json()).catch(() => null),
+        apiFetch('/api/v1/webhooks').then((r) => r.json()).catch(() => null),
+        apiFetch('/api/v1/webhooks/deliveries').then((r) => r.json()).catch(() => null),
       ]);
 
       if (statusRes && statusRes.status === 'ok') setStatus(statusRes);
@@ -182,7 +209,7 @@ export default function App() {
     e.preventDefault();
     if (!newKey.key.trim()) return;
     try {
-      const res = await fetch('/api/v1/keys', {
+      const res = await apiFetch('/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -210,7 +237,7 @@ export default function App() {
   const handleDeleteKey = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this viewing key and its associated notes?')) return;
     try {
-      const res = await fetch(`/api/v1/keys/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/v1/keys/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) {
         showToast('Viewing Key deleted successfully!');
@@ -227,7 +254,7 @@ export default function App() {
     e.preventDefault();
     if (!newWebhook.target_url.trim()) return;
     try {
-      const res = await fetch('/api/v1/webhooks', {
+      const res = await apiFetch('/api/v1/webhooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -243,7 +270,6 @@ export default function App() {
         setIsWebhookModalOpen(false);
         fetchData();
       } else {
-
         showToast(data.error || 'Failed to create webhook', 'error');
       }
     } catch (err: any) {
@@ -254,7 +280,7 @@ export default function App() {
   const handleDeleteWebhook = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this webhook endpoint and its delivery logs?')) return;
     try {
-      const res = await fetch(`/api/v1/webhooks/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/v1/webhooks/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) {
         showToast('Webhook endpoint deleted successfully!');
@@ -270,7 +296,7 @@ export default function App() {
   const handleSimulatePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/v1/simulator/simulate', {
+      const res = await apiFetch('/api/v1/simulator/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -295,7 +321,7 @@ export default function App() {
   const handlePurgeAllData = async () => {
     if (!window.confirm('⚠️ WARNING: This will purge all viewing keys, notes, webhooks, and delivery logs. Continue?')) return;
     try {
-      const res = await fetch('/api/v1/system/reset', {
+      const res = await apiFetch('/api/v1/system/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keep_keys: false })
@@ -325,11 +351,12 @@ export default function App() {
     setWalletError(null);
     setMobilePairStatus('waiting');
     try {
-      const res = await fetch('/api/wallet-pair/session', { method: 'POST' });
+      const res = await apiFetch('/api/wallet-pair/session', { method: 'POST' });
       const data = await res.json();
       if (data.session_id) {
         setMobileSession({
           sessionId: data.session_id,
+          token: data.token,
           qrPayload: data.qr_payload,
           expiresAt: data.expires_at
         });
@@ -348,7 +375,7 @@ export default function App() {
 
         pollingTimerRef.current = setInterval(async () => {
           try {
-            const pollRes = await fetch(`/api/wallet-pair/session/${data.session_id}`);
+            const pollRes = await apiFetch(`/api/wallet-pair/session/${data.session_id}?token=${data.token}`);
             const pollData = await pollRes.json();
             if (pollData.status === 'approved') {
               clearInterval(pollingTimerRef.current);
@@ -382,14 +409,18 @@ export default function App() {
     }
     setIsConnectingWallet(true);
     try {
-      const res = await fetch(`/api/wallet-pair/session/${mobileSession.sessionId}/approve`, {
+      const res = await apiFetch(`/api/wallet-pair/session/${mobileSession.sessionId}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Pairing-Token': mobileSession.token
+        },
         body: JSON.stringify({
           key: 'uviewtest1m70r2n0qvxq8n8wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f3q8n0wqukegelr43m02yjhcz35f',
           label: 'Zashi Mobile Wallet (Connected)',
           birth_height: status?.chain_tip ? status.chain_tip - 500 : 4520000,
-          key_type: 'UFVK'
+          key_type: 'UFVK',
+          token: mobileSession.token
         })
       });
       const data = await res.json();
@@ -460,7 +491,7 @@ export default function App() {
   const handleSimulateMetaMaskApproval = async () => {
     setIsConnectingWallet(true);
     try {
-      await fetch('/api/v1/keys', {
+      await apiFetch('/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -494,7 +525,7 @@ export default function App() {
         : zcash.getViewingKey());
       const keyString = res?.key || res;
       if (keyString) {
-        await fetch('/api/v1/keys', {
+        await apiFetch('/api/v1/keys', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -518,7 +549,7 @@ export default function App() {
   const handleSimulateExtension = async () => {
     setIsConnectingWallet(true);
     try {
-      await fetch('/api/v1/keys', {
+      await apiFetch('/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -726,6 +757,17 @@ export default function App() {
             >
               <Wallet size={16} />
               <span>{keys.length > 0 ? 'Connected Wallets' : 'Connect Wallet'}</span>
+            </button>
+
+            <button
+              className="header-icon-btn"
+              onClick={() => {
+                setTempApiKey(apiKey);
+                setIsApiKeyModalOpen(true);
+              }}
+              title="Gateway API Authentication Settings (X-API-Key)"
+            >
+              <Lock size={16} color="var(--orange-primary)" />
             </button>
 
             <button
@@ -2204,6 +2246,60 @@ app.post('/webhooks/zcash', (req, res) => {
         </div>
       )}
 
+
+      {/* API Authentication Key Settings Modal */}
+      {isApiKeyModalOpen && (
+        <div className="modal-backdrop">
+          <div className="modal-container" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Lock size={20} color="var(--orange-primary)" />
+                <h3 className="modal-title">API Authentication Key</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsApiKeyModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', lineHeight: '1.5', margin: 0 }}>
+                ZecShield enforces role-based access control. Enter your <code style={{ color: 'var(--orange-primary)' }}>ADMIN_API_KEY</code> or <code style={{ color: 'var(--orange-primary)' }}>READ_API_KEY</code> to authenticate dashboard requests.
+              </p>
+              <div className="form-group">
+                <label className="form-label">Active API Key (Sent via X-API-Key header)</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={tempApiKey}
+                  placeholder="zc_admin_test_secret_key"
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setTempApiKey('zc_admin_test_secret_key')}
+                >
+                  Reset Default Key
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setApiKey(tempApiKey.trim());
+                    setIsApiKeyModalOpen(false);
+                    showToast('API Key saved and active!', 'success');
+                    setTimeout(fetchData, 100);
+                  }}
+                >
+                  <Check size={16} />
+                  <span>Save Key</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Toast Notification */}
       {actionMessage && (

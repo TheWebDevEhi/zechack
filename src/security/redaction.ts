@@ -28,7 +28,7 @@ export interface SanitizedWebhookRecord {
  */
 export function maskViewingKey(key: string): string {
   if (!key) return '';
-  const clean = key.startsWith('enc:v1:') ? 'uview...[encrypted]' : key;
+  const clean = key.startsWith('enc:') ? 'uview...[encrypted]' : key;
   if (clean.length <= 16) {
     return `${clean.slice(0, 4)}...${clean.slice(-4)}`;
   }

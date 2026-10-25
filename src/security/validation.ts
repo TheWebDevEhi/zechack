@@ -135,3 +135,24 @@ export function validateViewingKeyInput(
     value: { cleanKey: clean, determinedType }
   };
 }
+
+/**
+ * Validates a shielded note memo text against the Zcash 512-byte protocol limit (ZIP 302).
+ */
+export function validateMemo(memo: unknown): ValidationResult<string> {
+  if (memo === undefined || memo === null || memo === '') {
+    return { isValid: true, value: '' };
+  }
+  if (typeof memo !== 'string') {
+    return { isValid: false, error: 'Memo must be a string' };
+  }
+  const byteLength = Buffer.byteLength(memo, 'utf8');
+  if (byteLength > 512) {
+    return {
+      isValid: false,
+      error: `Shielded memo exceeds maximum allowed size of 512 bytes (ZIP 302). Received ${byteLength} bytes.`
+    };
+  }
+  return { isValid: true, value: memo };
+}
+
