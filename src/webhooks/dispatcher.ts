@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { dbService, ShieldedNoteRecord, WebhookRecord } from '../db/database.js';
+import { validateWebhookUrl } from '../security/ssrf.js';
+import { config } from '../config.js';
 
 export class WebhookDispatcher {
   /**
@@ -7,9 +9,6 @@ export class WebhookDispatcher {
    */
   public static async dispatchNote(note: ShieldedNoteRecord): Promise<void> {
     // 1. Filter out internal wallet change notes from triggering payment webhooks.
-    // In Zcash shielded transactions, sending funds produces an external recipient note
-    // and an internal change note back to the sender's own address.
-    // Internal change notes must not trigger payment notifications.
     if (note.transfer_type === 'internal') {
       console.log(`[Webhook] Skipping internal change note ID #${note.id} for tx ${note.txid} (${note.amount_zec} ZEC)`);
       return;
@@ -20,8 +19,12 @@ export class WebhookDispatcher {
       return;
     }
 
+    const isSimulated = Boolean(note.is_simulated);
+    const eventName = isSimulated ? 'shielded_note.simulated' : 'shielded_note.confirmed';
+    const timestamp = Math.floor(Date.now() / 1000);
+
     const payload = {
-      event: 'shielded_note.detected',
+      event: eventName,
       data: {
         note_id: note.id,
         key_id: note.key_id,
@@ -33,21 +36,36 @@ export class WebhookDispatcher {
         amount_zec: note.amount_zec,
         transfer_type: note.transfer_type,
         memo: note.memo_text,
-        is_simulated: Boolean(note.is_simulated),
+        is_simulated: isSimulated,
+        verification_status: note.verification_status || (isSimulated ? 'simulated' : 'confirmed'),
       },
-      timestamp: Math.floor(Date.now() / 1000)
+      timestamp
     };
 
     const payloadJson = JSON.stringify(payload);
 
     for (const webhook of activeWebhooks) {
-      // 2. Prevent duplicate delivery if this transaction or note was already delivered to this endpoint
-      if ((await dbService.hasDeliveredTxid(webhook.id, note.txid)) || (await dbService.hasSuccessfulDelivery(webhook.id, note.id))) {
-        console.log(`[Webhook] Transaction ${note.txid} (note #${note.id}) was already successfully delivered to webhook #${webhook.id}. Skipping duplicate.`);
+      // Validate against SSRF before connecting
+      const ssrfCheck = await validateWebhookUrl(webhook.target_url, config.allowHttpWebhooks);
+      if (!ssrfCheck.isValid) {
+        console.warn(`[Webhook] Blocked dispatch to #${webhook.id} due to SSRF policy: ${ssrfCheck.error} (${webhook.target_url})`);
+        await dbService.logWebhookDelivery(
+          webhook.id,
+          note.id,
+          payloadJson,
+          0,
+          `Blocked by SSRF policy: ${ssrfCheck.error}`
+        );
         continue;
       }
 
-      await this.sendWithRetry(webhook, note.id, payloadJson, 3);
+      // Note: Multi-note deduplication logic will be refined in Phase 3
+      if ((await dbService.hasSuccessfulDelivery(webhook.id, note.id))) {
+        console.log(`[Webhook] Note #${note.id} was already successfully delivered to webhook #${webhook.id}. Skipping duplicate.`);
+        continue;
+      }
+
+      await this.sendWithRetry(webhook, note.id, payloadJson, eventName, isSimulated, timestamp, 3);
     }
   }
 
@@ -55,6 +73,9 @@ export class WebhookDispatcher {
     webhook: WebhookRecord,
     noteId: number,
     payloadJson: string,
+    eventName: string,
+    isSimulated: boolean,
+    timestamp: number,
     maxRetries: number
   ): Promise<void> {
     const signature = crypto
@@ -73,10 +94,13 @@ export class WebhookDispatcher {
           headers: {
             'Content-Type': 'application/json',
             'X-ZecShield-Signature': signature,
-            'X-ZecShield-Event': 'shielded_note.detected',
+            'X-ZecShield-Event': eventName,
+            'X-ZecShield-Simulated': isSimulated ? 'true' : 'false',
+            'X-ZecShield-Delivery-Timestamp': timestamp.toString(),
             'User-Agent': 'ZecShield-Webhook-Dispatcher/1.0'
           },
           body: payloadJson,
+          redirect: 'error', // Defend against DNS rebinding / redirect SSRF bypasses
           signal: AbortSignal.timeout(10000) // 10s timeout
         });
 

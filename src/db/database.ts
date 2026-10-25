@@ -1,11 +1,14 @@
 import { createClient, Client } from '@libsql/client';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { config } from '../config.js';
+import { encryptCredential, decryptCredential } from '../security/encryption.js';
 
 export interface ViewingKeyRecord {
   id: number;
   key_string: string;
+  key_hash?: string;
   key_type: string;
   label: string;
   birth_height: number;
@@ -26,6 +29,7 @@ export interface ShieldedNoteRecord {
   transfer_type: string;
   memo_text: string;
   is_simulated: number;
+  verification_status: 'confirmed' | 'simulated' | 'unverified';
   created_at: number;
 }
 
@@ -93,7 +97,8 @@ export class DatabaseService {
     await this.client.executeMultiple(`
       CREATE TABLE IF NOT EXISTS viewing_keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key_string TEXT UNIQUE NOT NULL,
+        key_string TEXT NOT NULL,
+        key_hash TEXT UNIQUE,
         key_type TEXT NOT NULL,
         label TEXT,
         birth_height INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +119,7 @@ export class DatabaseService {
         transfer_type TEXT NOT NULL,
         memo_text TEXT,
         is_simulated INTEGER NOT NULL DEFAULT 0,
+        verification_status TEXT NOT NULL DEFAULT 'confirmed',
         created_at INTEGER NOT NULL,
         UNIQUE(key_id, txid, pool, amount_zat) ON CONFLICT IGNORE
       );
@@ -137,6 +143,14 @@ export class DatabaseService {
         delivered_at INTEGER NOT NULL
       );
     `);
+
+    // Run graceful schema migrations on existing SQLite/Turso tables
+    try {
+      await this.client.execute('ALTER TABLE viewing_keys ADD COLUMN key_hash TEXT');
+    } catch {}
+    try {
+      await this.client.execute("ALTER TABLE shielded_notes ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'confirmed'");
+    } catch {}
   }
 
   // --- Viewing Keys ---
@@ -148,11 +162,13 @@ export class DatabaseService {
   ): Promise<ViewingKeyRecord> {
     if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
+    const keyHash = crypto.createHash('sha256').update(keyString).digest('hex');
+    const encryptedKey = encryptCredential(keyString);
 
     await this.client.execute({
-      sql: `INSERT INTO viewing_keys (key_string, key_type, label, birth_height, last_scanned_height, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?)`,
-      args: [keyString, keyType, label, birthHeight, birthHeight, now]
+      sql: `INSERT INTO viewing_keys (key_string, key_hash, key_type, label, birth_height, last_scanned_height, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      args: [encryptedKey, keyHash, keyType, label, birthHeight, birthHeight, now]
     });
 
     const created = await this.getViewingKeyByString(keyString);
@@ -167,7 +183,10 @@ export class DatabaseService {
       : 'SELECT * FROM viewing_keys ORDER BY id DESC';
 
     const res = await this.client.execute(query);
-    return res.rows as unknown as ViewingKeyRecord[];
+    return res.rows.map((row: any) => ({
+      ...row,
+      key_string: decryptCredential(row.key_string as string)
+    })) as unknown as ViewingKeyRecord[];
   }
 
   public async getViewingKeyById(id: number): Promise<ViewingKeyRecord | null> {
@@ -177,17 +196,26 @@ export class DatabaseService {
       args: [id]
     });
     if (res.rows.length === 0) return null;
-    return res.rows[0] as unknown as ViewingKeyRecord;
+    const row = res.rows[0] as any;
+    return {
+      ...row,
+      key_string: decryptCredential(row.key_string as string)
+    } as unknown as ViewingKeyRecord;
   }
 
   public async getViewingKeyByString(keyString: string): Promise<ViewingKeyRecord | null> {
     if (!this.client) throw new Error('Database not initialized');
+    const keyHash = crypto.createHash('sha256').update(keyString).digest('hex');
     const res = await this.client.execute({
-      sql: 'SELECT * FROM viewing_keys WHERE key_string = ? LIMIT 1',
-      args: [keyString]
+      sql: 'SELECT * FROM viewing_keys WHERE key_hash = ? OR key_string = ? LIMIT 1',
+      args: [keyHash, keyString]
     });
     if (res.rows.length === 0) return null;
-    return res.rows[0] as unknown as ViewingKeyRecord;
+    const row = res.rows[0] as any;
+    return {
+      ...row,
+      key_string: decryptCredential(row.key_string as string)
+    } as unknown as ViewingKeyRecord;
   }
 
   public async updateLastScannedHeight(keyId: number, height: number): Promise<void> {
@@ -223,12 +251,13 @@ export class DatabaseService {
   public async addShieldedNote(note: Omit<ShieldedNoteRecord, 'id' | 'created_at'>): Promise<ShieldedNoteRecord | null> {
     if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
+    const verificationStatus = note.verification_status || (note.is_simulated ? 'simulated' : 'confirmed');
 
     const insertRes = await this.client.execute({
       sql: `
         INSERT OR IGNORE INTO shielded_notes 
-        (key_id, txid, block_height, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (key_id, txid, block_height, block_time, pool, amount_zat, amount_zec, transfer_type, memo_text, is_simulated, verification_status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         note.key_id,
@@ -241,6 +270,7 @@ export class DatabaseService {
         note.transfer_type,
         note.memo_text || '',
         note.is_simulated || 0,
+        verificationStatus,
         now
       ]
     });
@@ -295,22 +325,31 @@ export class DatabaseService {
   public async addWebhook(targetUrl: string, secret: string, description: string = ''): Promise<WebhookRecord> {
     if (!this.client) throw new Error('Database not initialized');
     const now = Math.floor(Date.now() / 1000);
+    const encryptedSecret = encryptCredential(secret);
+
     await this.client.execute({
       sql: 'INSERT INTO webhooks (target_url, secret, description, is_active, created_at) VALUES (?, ?, ?, 1, ?)',
-      args: [targetUrl, secret, description, now]
+      args: [targetUrl, encryptedSecret, description, now]
     });
 
     const res = await this.client.execute({
       sql: 'SELECT * FROM webhooks WHERE target_url = ? ORDER BY id DESC LIMIT 1',
       args: [targetUrl]
     });
-    return res.rows[0] as unknown as WebhookRecord;
+    const row = res.rows[0] as any;
+    return {
+      ...row,
+      secret: decryptCredential(row.secret as string)
+    } as unknown as WebhookRecord;
   }
 
   public async getActiveWebhooks(): Promise<WebhookRecord[]> {
     if (!this.client) throw new Error('Database not initialized');
     const res = await this.client.execute('SELECT * FROM webhooks WHERE is_active = 1');
-    return res.rows as unknown as WebhookRecord[];
+    return res.rows.map((row: any) => ({
+      ...row,
+      secret: decryptCredential(row.secret as string)
+    })) as unknown as WebhookRecord[];
   }
 
   public async logWebhookDelivery(

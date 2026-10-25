@@ -52,7 +52,8 @@ export class PaymentSimulator {
       amount_zec: amountZec,
       transfer_type: options.transferType || 'incoming',
       memo_text: options.memo || '',
-      is_simulated: options.isSimulated !== undefined ? options.isSimulated : 1
+      is_simulated: 1,
+      verification_status: 'simulated'
     });
 
     if (!noteRecord) {

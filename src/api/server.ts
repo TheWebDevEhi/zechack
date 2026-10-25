@@ -8,7 +8,18 @@ export function createApp(): express.Application {
   const app = express();
 
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '100kb' }));
+
+  // Handle JSON parse error safely
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      return res.status(413).json({ error: 'Payload Too Large: Maximum request body size is 100KB' });
+    }
+    if (err instanceof SyntaxError && 'body' in err) {
+      return res.status(400).json({ error: 'Bad Request: Malformed JSON payload' });
+    }
+    next(err);
+  });
 
   // Mount API routes (support both /api/v1 and /api)
   app.use('/api/v1', apiRouter);
