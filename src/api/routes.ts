@@ -6,6 +6,7 @@ import { PaymentSimulator } from '../engine/simulator.js';
 import { WebhookDispatcher } from '../webhooks/dispatcher.js';
 import { config } from '../config.js';
 import { requireAuth, auditLog } from '../security/auth.js';
+import { verifyTransactionOnChain } from '../engine/verifier.js';
 import { sanitizeViewingKey, sanitizeWebhook } from '../security/redaction.js';
 import { validateWebhookUrl } from '../security/ssrf.js';
 import {
@@ -223,34 +224,60 @@ apiRouter.post('/transactions/index-confirmed', requireAuth('admin'), writeLimit
     }
 
     const cleanTxid = txidVal.value!;
-    // On-chain verification guard
+    let finalAmount = amountVal.value!;
+    let finalZat = Math.round(finalAmount * 100_000_000);
+    let finalPool = poolVal.value!;
+    let finalMemo = memoVal.value || '';
+    let finalBlockTime = parseInt(block_time, 10) || Math.floor(Date.now() / 1000);
+    let finalBlockHash = '';
+    let finalOutputIndex = 0;
+    let finalTransferType = 'incoming';
+
+    // Rigorous on-chain verification against trusted lightwalletd & viewing key (Item 1)
     if (verify_on_chain === true || config.nodeEnv === 'production') {
-      if (cleanTxid.startsWith('00000000') || cleanTxid.includes('deadbeef') || cleanTxid.includes('test')) {
+      const verif = await verifyTransactionOnChain({
+        txid: cleanTxid,
+        blockHeight: heightVal.value!,
+        viewingKeyString: keyRecord.key_string,
+        targetGrpcUrl: config.lightwalletdUrl,
+        network: config.network
+      });
+
+      if (!verif.verified) {
         return res.status(400).json({
-          error: 'On-chain verification failed: Transaction not found on Zcash network.'
+          error: verif.error || 'On-chain verification failed: Transaction not confirmed on Zcash network or note trial-decryption failed.'
         });
       }
-    }
 
-    const amount = amountVal.value!;
-    const zat = Math.round(amount * 100_000_000);
+      // Derive note metadata and amounts directly from verified chain data
+      finalAmount = verif.amountZec!;
+      finalZat = verif.amountZat!;
+      finalPool = verif.pool!;
+      finalMemo = verif.memoText || '';
+      finalBlockTime = verif.blockTime || finalBlockTime;
+      finalBlockHash = verif.blockHash || '';
+      finalOutputIndex = verif.outputIndex || 0;
+      finalTransferType = verif.transferType || 'incoming';
+    }
 
     const note = await dbService.addShieldedNote({
       key_id: keyId,
       txid: cleanTxid,
+      output_index: finalOutputIndex,
       block_height: heightVal.value!,
-      block_time: parseInt(block_time, 10) || Math.floor(Date.now() / 1000),
-      pool: poolVal.value!,
-      amount_zat: zat,
-      amount_zec: amount,
-      transfer_type: 'incoming',
-      memo_text: memoVal.value || '',
+      block_hash: finalBlockHash,
+      block_time: finalBlockTime,
+      pool: finalPool,
+      amount_zat: finalZat,
+      amount_zec: finalAmount,
+      transfer_type: finalTransferType,
+      memo_text: finalMemo,
       is_simulated: 0,
       verification_status: 'confirmed'
     });
 
     if (note) {
-      auditLog(req, 'INDEX_CONFIRMED_TRANSACTION', { txid: cleanTxid, block_height: heightVal.value, amount_zec: amount });
+      auditLog(req, 'INDEX_CONFIRMED_TRANSACTION', { txid: cleanTxid, block_height: heightVal.value, amount_zec: finalAmount });
       await WebhookDispatcher.dispatchNote(note);
     }
 

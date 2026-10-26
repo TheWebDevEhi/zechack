@@ -27,6 +27,7 @@ export function createApp(): express.Application {
   });
 
   // Strict CORS policy (SEC-04)
+  // Strict CORS policy (SEC-04)
   const allowedOrigins = config.corsOrigin
     ? config.corsOrigin.split(',').map((o) => o.trim())
     : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:5173'];
@@ -35,9 +36,19 @@ export function createApp(): express.Application {
     origin: (origin, callback) => {
       // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
-      if (config.nodeEnv !== 'production' || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+      try {
+        const originUrl = new URL(origin);
+        if (
+          config.nodeEnv !== 'production' ||
+          allowedOrigins.includes('*') ||
+          allowedOrigins.includes(origin) ||
+          originUrl.hostname.endsWith('.onrender.com') ||
+          originUrl.hostname === 'localhost' ||
+          originUrl.hostname === '127.0.0.1'
+        ) {
+          return callback(null, true);
+        }
+      } catch {}
       return callback(new Error(`CORS origin "${origin}" not allowed by policy`), false);
     },
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
@@ -53,7 +64,15 @@ export function createApp(): express.Application {
     if (err instanceof SyntaxError && 'body' in err) {
       return res.status(400).json({ error: 'Bad Request: Malformed JSON payload' });
     }
+    if (err && err.message && err.message.includes('CORS origin')) {
+      return res.status(403).json({ error: err.message });
+    }
     next(err);
+  });
+
+  // Health check endpoint for container orchestrators and Render (SEC-04)
+  app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() });
   });
 
   // Mount API routes (support both /api/v1 and /api)
@@ -65,7 +84,9 @@ export function createApp(): express.Application {
   if (fs.existsSync(dashboardDist)) {
     app.use(express.static(dashboardDist));
     app.use((req, res, next) => {
-      if (req.path.startsWith('/api')) return next();
+      if (req.path.startsWith('/api') || req.path.startsWith('/assets') || req.path.includes('.')) {
+        return next();
+      }
       res.sendFile(path.join(dashboardDist, 'index.html'));
     });
   } else {

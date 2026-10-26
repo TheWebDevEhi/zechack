@@ -1,5 +1,7 @@
 import dns from 'dns';
 import net from 'net';
+import http from 'http';
+import https from 'https';
 import { URL } from 'url';
 
 /**
@@ -170,4 +172,122 @@ export async function validateWebhookUrl(
   } catch (err: any) {
     return { isValid: false, error: `DNS resolution failed for "${hostname}": ${err.message}` };
   }
+}
+
+export function isRestrictedIp(ip: string, allowLocalhost: boolean = false): boolean {
+  return isRestrictedIpv4(ip, allowLocalhost) || isRestrictedIpv6(ip, allowLocalhost);
+}
+
+/**
+ * Creates a DNS lookup function for Node http/https agents that strictly checks
+ * every resolved address against restricted/private/metadata ranges at socket connection time.
+ * Prevents DNS rebinding and TOCTOU races where a domain points to a safe IP during validation
+ * but switches to 127.0.0.1 or 169.254.169.254 when the TCP socket connects.
+ */
+export function createSafeLookup(allowLocalhost: boolean = false) {
+  return function safeLookup(
+    hostname: string,
+    options: any,
+    callback: (err: NodeJS.ErrnoException | null, address: any, family?: number) => void
+  ) {
+    dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+      if (err) return callback(err, '', 4);
+      const addrs = Array.isArray(addresses) ? addresses : [addresses];
+      for (const addr of addrs) {
+        if (isRestrictedIp(addr.address, allowLocalhost)) {
+          const error = new Error(`SSRF Blocked: Hostname "${hostname}" resolved to restricted IP ${addr.address} at connection time`);
+          (error as any).code = 'ERR_SSRF_RESTRICTED_IP';
+          return callback(error, '', 4);
+        }
+      }
+      if (options && options.all) {
+        return callback(null, addrs);
+      }
+      return callback(null, addrs[0].address, addrs[0].family);
+    });
+  };
+}
+
+export interface SafeHttpResponse {
+  status: number;
+  ok: boolean;
+  text: () => Promise<string>;
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/**
+ * Hardened outbound HTTP client for webhooks:
+ * - Enforces destination-IP restrictions at socket connect time via hardened DNS lookup.
+ * - Disables automatic redirect following to prevent redirect-based SSRF.
+ * - Protects against DNS rebinding and mixed public/private DNS answers.
+ */
+export function safeWebhookPost(
+  targetUrl: string,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number = 10000,
+  allowLocalhost: boolean = false
+): Promise<SafeHttpResponse> {
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(targetUrl);
+    } catch (err: any) {
+      return reject(new Error(`Invalid URL: ${err.message}`));
+    }
+
+    const isHttps = parsed.protocol === 'https:';
+    if (!isHttps && parsed.protocol !== 'http:') {
+      return reject(new Error(`Unsupported protocol: ${parsed.protocol}`));
+    }
+
+    // Direct literal IP check before socket initialization
+    if (isRestrictedIp(parsed.hostname, allowLocalhost)) {
+      return reject(new Error(`SSRF Blocked: Destination IP ${parsed.hostname} is restricted`));
+    }
+
+    const lookupFn = createSafeLookup(allowLocalhost);
+    const agent = isHttps
+      ? new https.Agent({ lookup: lookupFn, keepAlive: false })
+      : new http.Agent({ lookup: lookupFn, keepAlive: false });
+
+    const client = isHttps ? https : http;
+    const req = client.request(
+      parsed,
+      {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Length': Buffer.byteLength(body).toString(),
+        },
+        agent,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => {
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+          const statusCode = res.statusCode || 0;
+          resolve({
+            status: statusCode,
+            ok: statusCode >= 200 && statusCode < 300,
+            text: async () => responseBody,
+            headers: res.headers,
+          });
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`Connection timed out after ${timeoutMs}ms`));
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.write(body);
+    req.end();
+  });
 }

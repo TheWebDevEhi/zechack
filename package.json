@@ -1,6 +1,6 @@
 {
   "name": "zecshield",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Developer-first Shielded Indexer & Webhook Gateway for Zcash",
   "main": "src/index.ts",
   "scripts": {
@@ -9,6 +9,7 @@
     "dev:dashboard": "npm --prefix dashboard run dev",
     "build:dashboard": "npm --prefix dashboard install --include=dev && npm --prefix dashboard run build",
     "build": "npm run build:dashboard",
+    "postinstall": "npm --prefix dashboard install --include=dev && npm --prefix dashboard run build",
     "db:reset": "tsx scripts/reset-db.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "test:security": "tsx --test tests/phase1-security.test.ts",

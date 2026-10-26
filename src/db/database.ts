@@ -408,6 +408,20 @@ export class DatabaseService {
     } as unknown as WebhookRecord;
   }
 
+  public async getWebhookById(id: number): Promise<WebhookRecord | null> {
+    if (!this.client) throw new Error('Database not initialized');
+    const res = await this.client.execute({
+      sql: 'SELECT * FROM webhooks WHERE id = ? LIMIT 1',
+      args: [id]
+    });
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0] as any;
+    return {
+      ...row,
+      secret: decryptCredential(row.secret as string)
+    } as unknown as WebhookRecord;
+  }
+
   public async getActiveWebhooks(): Promise<WebhookRecord[]> {
     if (!this.client) throw new Error('Database not initialized');
     const res = await this.client.execute('SELECT * FROM webhooks WHERE is_active = 1');

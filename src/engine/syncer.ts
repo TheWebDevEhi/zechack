@@ -1,4 +1,7 @@
 import { startSync, getChainTip, ShieldedTransaction } from '@ledgerhq/zcash-utils';
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
+import path from 'path';
 import { dbService, ViewingKeyRecord, ShieldedNoteRecord } from '../db/database.js';
 import { WebhookDispatcher } from '../webhooks/dispatcher.js';
 import { protocolAdapterProxy } from './proxy.js';
@@ -49,8 +52,100 @@ export class ChainSyncer {
     console.log('[Syncer] Stopped chain scanner.');
   }
 
+  public chainBlockHashFetcher: ((height: number) => Promise<string | null>) | null = null;
+
   public getLatestTip(): number {
     return this.currentTip;
+  }
+
+  /**
+   * Fetches on-chain block hash from lightwalletd or injected fetcher (for testing).
+   */
+  public async fetchChainBlockHash(height: number): Promise<string | null> {
+    if (this.chainBlockHashFetcher) {
+      return this.chainBlockHashFetcher(height);
+    }
+
+    try {
+      const cleanHost = config.lightwalletdUrl.replace(/^https?:\/\//, '');
+      const isSecure = config.lightwalletdUrl.startsWith('https://') || config.lightwalletdUrl.includes(':443');
+      const creds = isSecure ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
+
+      const PROTO_DIR = path.resolve(process.cwd(), 'proto');
+      const PROTO_PATH = path.join(PROTO_DIR, 'service.proto');
+      const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+        keepCase: true,
+        longs: String,
+        enums: String,
+        defaults: true,
+        oneofs: true,
+        includeDirs: [PROTO_DIR]
+      });
+      const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
+      const client = new protoDescriptor.cash.z.wallet.sdk.rpc.CompactTxStreamer(cleanHost, creds);
+
+      const block = await new Promise<any>((resolve, reject) => {
+        client.GetBlock({ height }, (err: any, res: any) => {
+          if (err) return reject(err);
+          resolve(res);
+        });
+      });
+
+      if (block && block.hash) {
+        return Buffer.from(block.hash).toString('hex');
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Verifies block continuity and detects chain forks automatically during normal sync (Item 4):
+   * 1. Detects height rewinds where chainTip < latestIndexedBlock.
+   * 2. Detects block-hash divergence where local indexed block hash != on-chain block hash at that height.
+   * 3. Automatically traverses backward to identify the common ancestor fork height and executes rollback.
+   */
+  public async checkChainContinuity(): Promise<boolean> {
+    const latestBlock = await dbService.getLatestIndexedBlock();
+    if (!latestBlock || latestBlock.height <= 0) return true;
+
+    // 1. Check for height rewind
+    if (this.currentTip > 0 && this.currentTip < latestBlock.height) {
+      console.warn(`[Syncer] Chain tip (${this.currentTip}) is lower than latest indexed block (${latestBlock.height}). Detected chain reorganization!`);
+      await this.handleReorganization(this.currentTip);
+      return false;
+    }
+
+    // 2. Check for block-hash divergence against lightwalletd
+    try {
+      const chainHash = await this.fetchChainBlockHash(latestBlock.height);
+      if (chainHash && latestBlock.block_hash && chainHash !== latestBlock.block_hash) {
+        console.warn(
+          `[Syncer Alert] Chain fork detected at block #${latestBlock.height}! ` +
+          `Local hash: ${latestBlock.block_hash}, Chain hash: ${chainHash}. Traversing to common ancestor...`
+        );
+
+        let forkHeight = latestBlock.height - 1;
+        while (forkHeight > 0) {
+          const stored = await dbService.getIndexedBlock(forkHeight);
+          if (!stored) break;
+          const chainHashAtH = await this.fetchChainBlockHash(forkHeight);
+          if (chainHashAtH && chainHashAtH === stored.block_hash) {
+            break; // Found common ancestor block
+          }
+          forkHeight--;
+        }
+
+        console.warn(`[Syncer] Common ancestor fork height identified at block #${forkHeight}. Executing automatic rollback...`);
+        await this.handleReorganization(forkHeight);
+        return false;
+      }
+    } catch (err: any) {
+      console.warn(`[Syncer] Chain continuity verification warning: ${err.message}`);
+    }
+
+    return true;
   }
 
   /**
@@ -66,12 +161,8 @@ export class ChainSyncer {
     try {
       this.currentTip = await getChainTip(config.lightwalletdUrl);
 
-      // Automatic chain reorganization detection: if current tip rewound below indexed blocks
-      const latestBlock = await dbService.getLatestIndexedBlock();
-      if (latestBlock && this.currentTip > 0 && this.currentTip < latestBlock.height) {
-        console.warn(`[Syncer] Chain tip (${this.currentTip}) is lower than latest indexed block (${latestBlock.height}). Detected chain reorganization!`);
-        await this.handleReorganization(this.currentTip);
-      }
+      // Automatic chain reorganization detection (height rewind + hash continuity)
+      await this.checkChainContinuity();
 
       const activeKeys = await dbService.getViewingKeys(true);
       if (!activeKeys.length) {

@@ -1,6 +1,5 @@
 node_modules/
-dist/
-dashboard/dist/
+/dist/
 .env
 .env.local
 data/

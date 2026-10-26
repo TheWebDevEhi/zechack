@@ -7,20 +7,20 @@ const SALT_LENGTH = 16; // 128-bit salt for HKDF
 const PREFIX_V1 = 'enc:v1:';
 const PREFIX_V2 = 'enc:v2:';
 
-function getDerivedKeyV1(): Buffer {
-  return crypto.createHash('sha256').update(config.encryptionKey).digest();
+function getDerivedKeyV1(overrideKey?: string): Buffer {
+  return crypto.createHash('sha256').update(overrideKey || config.encryptionKey).digest();
 }
 
-function getDerivedKeyV2(salt: Buffer): Buffer {
+function getDerivedKeyV2(salt: Buffer, overrideKey?: string): Buffer {
   return Buffer.from(
-    crypto.hkdfSync('sha256', config.encryptionKey, salt, 'zecshield-credentials-v2', 32)
+    crypto.hkdfSync('sha256', overrideKey || config.encryptionKey, salt, 'zecshield-credentials-v2', 32)
   );
 }
 
 /**
  * Encrypts a sensitive string (e.g., raw viewing key, webhook secret) using AES-256-GCM with HKDF (enc:v2).
  */
-export function encryptCredential(plaintext: string): string {
+export function encryptCredential(plaintext: string, overrideKey?: string): string {
   if (!plaintext) return plaintext;
   // If already encrypted with any supported format, return as is
   if (plaintext.startsWith(PREFIX_V2) || plaintext.startsWith(PREFIX_V1)) {
@@ -29,7 +29,7 @@ export function encryptCredential(plaintext: string): string {
 
   const salt = crypto.randomBytes(SALT_LENGTH);
   const iv = crypto.randomBytes(IV_LENGTH);
-  const key = getDerivedKeyV2(salt);
+  const key = getDerivedKeyV2(salt, overrideKey);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
   let encrypted = cipher.update(plaintext, 'utf8', 'hex');
@@ -43,7 +43,7 @@ export function encryptCredential(plaintext: string): string {
  * Decrypts an encrypted credential.
  * Supports both modern enc:v2: (HKDF) and legacy enc:v1: (SHA-256) formats.
  */
-export function decryptCredential(ciphertext: string): string {
+export function decryptCredential(ciphertext: string, overrideKey?: string): string {
   if (!ciphertext) return ciphertext;
 
   // Modern HKDF format (enc:v2:salt:iv:authTag:ciphertext)
@@ -58,7 +58,7 @@ export function decryptCredential(ciphertext: string): string {
       const salt = Buffer.from(saltHex, 'hex');
       const iv = Buffer.from(ivHex, 'hex');
       const authTag = Buffer.from(authTagHex, 'hex');
-      const key = getDerivedKeyV2(salt);
+      const key = getDerivedKeyV2(salt, overrideKey);
 
       const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
       decipher.setAuthTag(authTag);
@@ -81,7 +81,7 @@ export function decryptCredential(ciphertext: string): string {
       }
 
       const [ivHex, authTagHex, encryptedDataHex] = parts;
-      const key = getDerivedKeyV1();
+      const key = getDerivedKeyV1(overrideKey);
       const iv = Buffer.from(ivHex, 'hex');
       const authTag = Buffer.from(authTagHex, 'hex');
 

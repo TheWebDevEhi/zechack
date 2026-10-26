@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { dbService, ShieldedNoteRecord, WebhookRecord } from '../db/database.js';
-import { validateWebhookUrl } from '../security/ssrf.js';
+import { validateWebhookUrl, safeWebhookPost } from '../security/ssrf.js';
 import { config } from '../config.js';
 
 export class WebhookDispatcher {
@@ -164,9 +164,9 @@ export class WebhookDispatcher {
           return;
         }
 
-        const response = await fetch(webhook.target_url, {
-          method: 'POST',
-          headers: {
+        const response = await safeWebhookPost(
+          webhook.target_url,
+          {
             'Content-Type': 'application/json',
             'X-ZecShield-Signature': signature,
             'X-ZecShield-Event': eventName,
@@ -175,10 +175,10 @@ export class WebhookDispatcher {
             'X-ZecShield-Delivery-Timestamp': timestamp.toString(),
             'User-Agent': 'ZecShield-Webhook-Dispatcher/1.0'
           },
-          body: payloadJson,
-          redirect: 'error', // Defend against redirect SSRF bypasses
-          signal: AbortSignal.timeout(10000) // 10s timeout
-        });
+          payloadJson,
+          10000,
+          config.allowLocalhostWebhooks
+        );
 
         const responseText = await response.text().catch(() => '');
         await dbService.logWebhookDelivery(
