@@ -1173,7 +1173,7 @@ export default function App() {
             TAB 2: VIEWING KEYS MANAGEMENT
             ================================================================== */}
         {activeTab === 'keys' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="tab-content-pane">
             <div className="page-title-row">
               <div className="page-title-left">
                 <h1>Viewing Keys</h1>
@@ -1318,7 +1318,7 @@ export default function App() {
             TAB 3: WEBHOOKS & DELIVERIES
             ================================================================== */}
         {activeTab === 'webhooks' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="tab-content-pane">
             <div className="page-title-row">
               <div className="page-title-left">
                 <h1>Webhooks & Deliveries</h1>
@@ -1478,7 +1478,7 @@ export default function App() {
             TAB 4: TEST PAYMENT SIMULATOR
             ================================================================== */}
         {activeTab === 'simulator' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="tab-content-pane">
             <div className="page-title-row">
               <div className="page-title-left">
                 <h1>Test Payment Simulator</h1>
@@ -1593,7 +1593,7 @@ export default function App() {
             TAB 5: API DOCUMENTATION & SNIPPETS
             ================================================================== */}
         {activeTab === 'docs' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="tab-content-pane">
             <div className="page-title-row">
               <div className="page-title-left">
                 <h1>Developer API Reference</h1>

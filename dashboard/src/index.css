@@ -384,6 +384,13 @@ body {
   min-width: 0;
 }
 
+.tab-content-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
 /* Top Header */
 .top-header {
   display: flex;
@@ -1735,20 +1742,30 @@ body {
 
   .analytics-grid {
     grid-template-columns: 1fr;
-    gap: 1rem;
+    gap: 1.35rem;
   }
 
   .simulator-grid {
     grid-template-columns: 1fr;
-    gap: 1rem;
+    gap: 1.35rem;
+  }
+
+  .app-main,
+  .tab-content-pane {
+    gap: 1.75rem;
   }
 }
 
 /* 3. Phablets & Mobile Devices (481px to 768px) */
 @media (max-width: 768px) {
   .app-wrapper {
-    padding: 0.75rem;
-    gap: 1rem;
+    padding: 0.85rem 0.75rem;
+    gap: 1.35rem;
+  }
+
+  .app-main,
+  .tab-content-pane {
+    gap: 1.85rem;
   }
 
   .app-sidebar {
@@ -1759,21 +1776,29 @@ body {
     padding: 0.85rem 1rem 1rem;
   }
 
+  .top-header {
+    gap: 0.9rem;
+  }
+
+  .top-header-right {
+    gap: 0.75rem;
+  }
+
   .stat-cards-grid {
     grid-template-columns: repeat(2, 1fr);
-    gap: 0.75rem;
+    gap: 1.15rem;
   }
 
   .stat-card-featured,
   .stat-card-white {
-    padding: 1.15rem;
-    min-height: 130px;
+    padding: 1.25rem 1.15rem;
+    min-height: 135px;
   }
 
   .stat-card-white .stat-value,
   .stat-card-featured .stat-value {
     font-size: 1.55rem;
-    margin: 0.35rem 0;
+    margin: 0.45rem 0;
   }
 
   .stat-arrow-btn {
@@ -1784,44 +1809,69 @@ body {
   .page-title-row {
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.75rem;
+    gap: 1.15rem;
   }
 
   .page-title-left h1 {
     font-size: 1.6rem;
+    margin-bottom: 0.35rem;
   }
 
   .page-title-actions {
     width: 100%;
     display: flex;
-    gap: 0.5rem;
+    gap: 0.65rem;
   }
 
   .page-title-actions .btn {
     flex: 1;
   }
 
+  .analytics-grid {
+    grid-template-columns: 1fr;
+    gap: 1.65rem;
+  }
+
+  .simulator-grid {
+    grid-template-columns: 1fr;
+    gap: 1.65rem;
+  }
+
   .wallet-connect-banner {
     flex-direction: column;
     align-items: flex-start;
-    gap: 1rem;
-    padding: 1.15rem;
+    gap: 1.25rem;
+    padding: 1.25rem;
   }
 
   .wallet-connect-banner > div:last-child {
     width: 100%;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
+    gap: 0.65rem;
   }
 
   .wallet-connect-banner > div:last-child .btn {
     width: 100%;
   }
 
+  .table-card {
+    padding: 1.35rem 1.15rem;
+  }
+
+  .table-header-bar {
+    gap: 1.15rem;
+    margin-bottom: 1.35rem;
+  }
+
+  .card-header-row {
+    margin-bottom: 1.25rem;
+    gap: 0.65rem;
+  }
+
   /* Modals */
   .modal-backdrop {
-    padding: 0.75rem;
+    padding: 0.85rem;
     align-items: flex-start;
   }
 
@@ -1835,6 +1885,7 @@ body {
   .wallet-nav-tabs {
     grid-template-columns: repeat(2, 1fr);
     padding: 0.5rem 0.75rem;
+    gap: 0.45rem;
   }
 
   .wallet-modal-body,
@@ -1846,8 +1897,13 @@ body {
 /* 4. Compact Mobile Devices (<= 480px, down to 320px) */
 @media (max-width: 480px) {
   .app-wrapper {
-    padding: 0.5rem;
-    gap: 0.75rem;
+    padding: 0.75rem 0.6rem;
+    gap: 1.25rem;
+  }
+
+  .app-main,
+  .tab-content-pane {
+    gap: 1.75rem;
   }
 
   .app-sidebar {
@@ -1873,10 +1929,14 @@ body {
     height: 38px;
   }
 
+  .top-header {
+    gap: 0.85rem;
+  }
+
   .top-header-right {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 0.5rem;
+    gap: 0.65rem;
     width: 100%;
   }
 
@@ -1885,6 +1945,7 @@ body {
     width: 100%;
     padding: 0.45rem 0.75rem;
     justify-content: flex-start;
+    margin-top: 0.25rem;
   }
 
   .user-name-title {
@@ -1905,23 +1966,83 @@ body {
 
   .stat-cards-grid {
     grid-template-columns: 1fr;
-    gap: 0.65rem;
+    gap: 1.15rem;
+  }
+
+  .stat-card-featured,
+  .stat-card-white {
+    padding: 1.25rem 1.15rem;
+    min-height: 135px;
+  }
+
+  .stat-card-white .stat-value,
+  .stat-card-featured .stat-value {
+    font-size: 1.55rem;
+    margin: 0.45rem 0;
+  }
+
+  .page-title-row {
+    gap: 1.15rem;
   }
 
   .page-title-left h1 {
     font-size: 1.35rem;
+    margin-bottom: 0.35rem;
   }
 
   .page-title-actions {
     flex-direction: column;
+    gap: 0.65rem;
+    width: 100%;
   }
 
   .page-title-actions .btn {
     width: 100%;
   }
 
+  .analytics-grid {
+    grid-template-columns: 1fr;
+    gap: 1.65rem;
+  }
+
+  .pool-bars-container {
+    gap: 1.15rem;
+    margin-top: 0.75rem;
+  }
+
+  .syncer-status-widget {
+    padding: 1.4rem;
+  }
+
+  .syncer-status-widget > div:last-child {
+    margin-top: 1.35rem;
+  }
+
+  .quick-action-list {
+    gap: 0.85rem;
+  }
+
+  .quick-action-item {
+    padding: 0.85rem 1rem;
+  }
+
+  .simulator-grid {
+    grid-template-columns: 1fr;
+    gap: 1.65rem;
+  }
+
+  .simulator-grid .form-group {
+    margin-bottom: 1.25rem;
+  }
+
+  .wallet-connect-banner {
+    gap: 1.25rem;
+    padding: 1.25rem 1rem;
+  }
+
   .wallet-connect-banner > div:last-child {
     grid-template-columns: 1fr;
+    gap: 0.65rem;
   }
 
   .filter-pills-row {
@@ -1929,6 +2050,8 @@ body {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    padding: 0.25rem;
+    gap: 0.4rem;
   }
 
   .filter-pill {
@@ -1937,29 +2060,39 @@ body {
   }
 
   .table-card {
-    padding: 1rem 0.75rem;
-    border-radius: var(--radius-lg);
+    padding: 1.25rem 0.95rem;
+    border-radius: var(--radius-xl);
+  }
+
+  .table-header-bar {
+    gap: 1.15rem;
+    margin-bottom: 1.25rem;
   }
 
   .card-header-row {
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.65rem;
+    margin-bottom: 1.15rem;
   }
 
   .data-table th,
   .data-table td {
-    padding: 0.55rem 0.5rem;
-    font-size: 0.76rem;
+    padding: 0.75rem 0.65rem;
+    font-size: 0.78rem;
   }
 
   .wallet-modal-header,
   .app-modal-header {
-    padding: 1rem 1rem 0.75rem;
+    padding: 1.15rem 1.15rem 0.85rem;
   }
 
   .wallet-modal-body,
   .app-modal-body {
-    padding: 1rem;
+    padding: 1.15rem;
+  }
+
+  .form-group {
+    margin-bottom: 1.15rem;
   }
 }
 
