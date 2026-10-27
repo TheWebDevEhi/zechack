@@ -26,7 +26,8 @@ import {
   Laptop,
   X,
   Check,
-  Menu
+  Menu,
+  ChevronDown
 } from 'lucide-react';
 
 interface NetworkStatus {
@@ -45,13 +46,16 @@ interface NetworkStatus {
 
 interface ViewingKey {
   id: number;
-  key_string: string;
+  key_string?: string;
+  key_preview?: string;
   key_type: string;
   label: string;
   birth_height: number;
   last_scanned_height: number;
   is_active: number;
   created_at: number;
+  sync_percent?: number;
+  is_synced?: boolean;
 }
 
 interface ShieldedTransaction {
@@ -72,7 +76,8 @@ interface ShieldedTransaction {
 interface WebhookRecord {
   id: number;
   target_url: string;
-  secret: string;
+  secret?: string;
+  secret_preview?: string;
   description: string;
   is_active: number;
   created_at: number;
@@ -126,7 +131,9 @@ export default function App() {
   // Mobile navigation drawer state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
-
+  // User Profile Header Dropdown state
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState<boolean>(false);
+  const userDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // API Authentication Key state for gateway access (APP-01)
   const [apiKey, setApiKey] = useState<string>(() => {
@@ -143,6 +150,36 @@ export default function App() {
       localStorage.setItem('zecshield_api_key', apiKey);
     }
   }, [apiKey]);
+
+  // Global click-outside & Escape key handlers for dropdowns and modals
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (userDropdownRef.current && !userDropdownRef.current.contains(e.target as Node)) {
+        setIsUserDropdownOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsUserDropdownOpen(false);
+        setIsWalletModalOpen(false);
+        setIsManualKeyModalOpen(false);
+        setIsWebhookModalOpen(false);
+        setIsApiKeyModalOpen(false);
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   // Authenticated fetch wrapper attaching X-API-Key header to protected gateway routes
   const apiFetch = (url: string, options: RequestInit = {}) => {
@@ -467,7 +504,7 @@ export default function App() {
       });
       const keyString = typeof res === 'string' ? res : res?.key || JSON.stringify(res);
       if (keyString) {
-        await fetch('/api/v1/keys', {
+        await apiFetch('/api/v1/keys', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -572,9 +609,9 @@ export default function App() {
   // Filtered transactions
   const filteredTransactions = transactions.filter((tx) => {
     const matchesSearch =
-      tx.txid.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tx.memo_text.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tx.block_height.toString().includes(searchTerm);
+      (tx.txid || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (tx.memo_text || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (tx.block_height !== undefined ? tx.block_height.toString() : '').includes(searchTerm);
     const matchesPool = poolFilter === 'ALL' || tx.pool === poolFilter;
     return matchesSearch && matchesPool;
   });
@@ -593,6 +630,11 @@ export default function App() {
 
   return (
     <div className="app-wrapper">
+      {/* Mobile Menu Backdrop */}
+      {isMobileMenuOpen && (
+        <div className="mobile-menu-backdrop" onClick={() => setIsMobileMenuOpen(false)} />
+      )}
+
       {/* ====================================================================
           LEFT SIDEBAR (Template 1 Inspired)
           ==================================================================== */}
@@ -778,33 +820,117 @@ export default function App() {
               <RefreshCw size={17} className={isRefreshing ? 'spin-animation' : ''} />
             </button>
 
-            {/* User Profile / Active Monitored Wallet */}
-            <div
-              className="user-profile-badge"
-              onClick={() => {
-                setWalletError(null);
-                setIsWalletModalOpen(true);
-              }}
-              style={{ cursor: 'pointer' }}
-              title="Click to manage or connect wallets"
-            >
-              <div className="user-avatar-circle">
-                {keys.length > 0 && keys[0].label.toLowerCase().includes('metamask')
-                  ? '🦊'
-                  : keys.length > 0 && (keys[0].label.toLowerCase().includes('mobile') || keys[0].label.toLowerCase().includes('zashi'))
-                  ? '📱'
-                  : keys.length > 0 && keys[0].label.toLowerCase().includes('extension')
-                  ? '🧩'
-                  : 'ZW'}
+            {/* User Profile / Active Monitored Wallet with Dropdown */}
+            <div className="user-dropdown-wrapper" ref={userDropdownRef}>
+              <div
+                className={`user-profile-badge ${isUserDropdownOpen ? 'active' : ''}`}
+                onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+                style={{ cursor: 'pointer' }}
+                title="Click to view wallet details and quick settings"
+              >
+                <div className="user-avatar-circle">
+                  {keys.length > 0 && (keys[0].label || '').toLowerCase().includes('metamask')
+                    ? '🦊'
+                    : keys.length > 0 && ((keys[0].label || '').toLowerCase().includes('mobile') || (keys[0].label || '').toLowerCase().includes('zashi'))
+                    ? '📱'
+                    : keys.length > 0 && (keys[0].label || '').toLowerCase().includes('extension')
+                    ? '🧩'
+                    : 'ZW'}
+                </div>
+                <div className="user-info-text">
+                  <span className="user-name-title">
+                    {keys.length > 0 ? keys[0].label || 'Main Testnet Wallet' : 'No Wallet Connected'}
+                  </span>
+                  <span className="user-wallet-address">
+                    {keys.length > 0
+                      ? (() => {
+                          const val = keys[0].key_preview || keys[0].key_string || '';
+                          return val.length > 16 ? `${val.slice(0, 10)}...${val.slice(-6)}` : val || 'Monitored UFVK';
+                        })()
+                      : 'Click to connect wallet'}
+                  </span>
+                </div>
+                <ChevronDown
+                  size={14}
+                  color="var(--text-light)"
+                  style={{
+                    marginLeft: '4px',
+                    transform: isUserDropdownOpen ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.2s'
+                  }}
+                />
               </div>
-              <div className="user-info-text">
-                <span className="user-name-title">
-                  {keys.length > 0 ? keys[0].label || 'Main Testnet Wallet' : 'No Wallet Connected'}
-                </span>
-                <span className="user-wallet-address">
-                  {keys.length > 0 ? `${keys[0].key_string.slice(0, 10)}...${keys[0].key_string.slice(-6)}` : 'Click to connect wallet'}
-                </span>
-              </div>
+
+              {/* User Profile Dropdown Menu */}
+              {isUserDropdownOpen && (
+                <div className="user-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                  <div className="user-dropdown-header">
+                    <div className="user-dropdown-header-status">
+                      <span className="badge badge-active" style={{ fontSize: '0.65rem' }}>Zcash Testnet</span>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        {keys.length > 0 ? `${keys.length} Key${keys.length > 1 ? 's' : ''}` : 'Inactive'}
+                      </span>
+                    </div>
+                    <div className="user-dropdown-header-title">
+                      {keys.length > 0 ? keys[0].label || 'Active Monitored Key' : 'No Active Wallet'}
+                    </div>
+                    <div className="user-dropdown-header-key">
+                      {keys.length > 0
+                        ? (keys[0].key_preview || (keys[0].key_string ? `${keys[0].key_string.slice(0, 12)}...` : 'Registered'))
+                        : 'Connect wallet or register UFVK'}
+                    </div>
+                  </div>
+
+                  <button
+                    className="user-dropdown-item"
+                    onClick={() => {
+                      setIsUserDropdownOpen(false);
+                      setWalletError(null);
+                      setWalletTab('metamask');
+                      setIsWalletModalOpen(true);
+                    }}
+                  >
+                    <Wallet size={16} color="var(--orange-primary)" />
+                    <span>Connect / Switch Wallet</span>
+                  </button>
+
+                  <button
+                    className="user-dropdown-item"
+                    onClick={() => {
+                      setIsUserDropdownOpen(false);
+                      setIsManualKeyModalOpen(true);
+                    }}
+                  >
+                    <Key size={16} color="var(--orange-primary)" />
+                    <span>Register Viewing Key</span>
+                  </button>
+
+                  <button
+                    className="user-dropdown-item"
+                    onClick={() => {
+                      setIsUserDropdownOpen(false);
+                      setTempApiKey(apiKey);
+                      setIsApiKeyModalOpen(true);
+                    }}
+                  >
+                    <Lock size={16} color="var(--orange-primary)" />
+                    <span>API Authentication Key</span>
+                  </button>
+
+                  <div className="user-dropdown-divider" />
+
+                  <button
+                    className="user-dropdown-item danger"
+                    onClick={() => {
+                      setIsUserDropdownOpen(false);
+                      handlePurgeAllData();
+                    }}
+                  >
+                    <Trash2 size={16} />
+                    <span>Purge Testnet Data</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -1274,12 +1400,15 @@ export default function App() {
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                {k.key_string.slice(0, 16)}...{k.key_string.slice(-10)}
+                                {(() => {
+                                  const val = k.key_preview || k.key_string || 'uview...';
+                                  return val.length > 26 ? `${val.slice(0, 16)}...${val.slice(-10)}` : val;
+                                })()}
                               </span>
                               <button
                                 className="btn btn-secondary btn-icon-only btn-sm"
                                 style={{ width: '28px', height: '28px' }}
-                                onClick={() => copyToClipboard(k.key_string, 'Viewing Key')}
+                                onClick={() => copyToClipboard(k.key_string || k.key_preview || '', 'Viewing Key')}
                                 title="Copy Key String"
                               >
                                 <Copy size={12} />
@@ -1384,12 +1513,12 @@ export default function App() {
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                {w.secret.slice(0, 10)}...
+                                {w.secret_preview || (w.secret ? `${w.secret.slice(0, 10)}...` : 'whsec_••••••••••••')}
                               </span>
                               <button
                                 className="btn btn-secondary btn-icon-only btn-sm"
                                 style={{ width: '28px', height: '28px' }}
-                                onClick={() => copyToClipboard(w.secret, 'Secret')}
+                                onClick={() => copyToClipboard(w.secret || w.secret_preview || '', 'Secret')}
                                 title="Copy Secret"
                               >
                                 <Copy size={12} />
@@ -2249,22 +2378,30 @@ app.post('/webhooks/zcash', (req, res) => {
 
       {/* API Authentication Key Settings Modal */}
       {isApiKeyModalOpen && (
-        <div className="modal-backdrop">
-          <div className="modal-container" style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Lock size={20} color="var(--orange-primary)" />
-                <h3 className="modal-title">API Authentication Key</h3>
+        <div className="modal-backdrop" onClick={() => setIsApiKeyModalOpen(false)}>
+          <div className="app-modal-card" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="app-modal-header">
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <Lock size={20} color="var(--orange-primary)" />
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                    API Authentication Key
+                  </h2>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Enter your <code style={{ color: 'var(--orange-primary)' }}>ADMIN_API_KEY</code> or <code style={{ color: 'var(--orange-primary)' }}>READ_API_KEY</code> to authenticate gateway requests.
+                </p>
               </div>
-              <button className="modal-close-btn" onClick={() => setIsApiKeyModalOpen(false)}>
+              <button
+                className="wallet-modal-close-btn"
+                onClick={() => setIsApiKeyModalOpen(false)}
+                title="Close"
+              >
                 <X size={18} />
               </button>
             </div>
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', lineHeight: '1.5', margin: 0 }}>
-                ZecShield enforces role-based access control. Enter your <code style={{ color: 'var(--orange-primary)' }}>ADMIN_API_KEY</code> or <code style={{ color: 'var(--orange-primary)' }}>READ_API_KEY</code> to authenticate dashboard requests.
-              </p>
-              <div className="form-group">
+            <div className="app-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Active API Key (Sent via X-API-Key header)</label>
                 <input
                   type="password"

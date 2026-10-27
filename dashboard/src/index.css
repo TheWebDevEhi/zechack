@@ -1371,23 +1371,9 @@ body {
   animation: fadeIn 0.2s ease;
 }
 
-.wallet-modal-card {
-  background: #ffffff;
-  border-radius: var(--radius-2xl);
-  border: 1px solid var(--border-subtle);
-  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
-  width: 100%;
-  max-width: 620px;
-  max-height: calc(100vh - 3rem);
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  margin: auto 0;
-  overflow: hidden;
-}
-
-.app-modal-card {
+.wallet-modal-card,
+.app-modal-card,
+.modal-container {
   background: #ffffff;
   border-radius: var(--radius-2xl);
   border: 1px solid var(--border-subtle);
@@ -1403,8 +1389,13 @@ body {
   overflow: hidden;
 }
 
+.wallet-modal-card {
+  max-width: 620px;
+}
+
 .wallet-modal-header,
-.app-modal-header {
+.app-modal-header,
+.modal-header {
   padding: 1.5rem 1.75rem 1.25rem;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
@@ -1414,16 +1405,23 @@ body {
   flex-shrink: 0;
 }
 
-.app-modal-body {
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.app-modal-body,
+.modal-body {
   padding: 1.75rem;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   flex: 1;
 }
 
-
-
-.wallet-modal-close-btn {
+.wallet-modal-close-btn,
+.modal-close-btn {
   background: #f1f5f9;
   border: none;
   width: 32px;
@@ -1438,10 +1436,115 @@ body {
   flex-shrink: 0;
 }
 
-.wallet-modal-close-btn:hover {
+.wallet-modal-close-btn:hover,
+.modal-close-btn:hover {
   background: #e2e8f0;
   color: var(--text-main);
   transform: rotate(90deg);
+}
+
+/* User Profile Dropdown Menu */
+.user-dropdown-wrapper {
+  position: relative;
+}
+
+.user-profile-badge.active {
+  border-color: var(--orange-warm);
+  background: var(--orange-light);
+}
+
+.user-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 290px;
+  background: #ffffff;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-dropdown);
+  padding: 0.75rem;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  animation: slideDownNav 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.user-dropdown-header {
+  padding: 0.75rem 0.85rem;
+  background: var(--bg-card-subtle);
+  border-radius: var(--radius-lg);
+  margin-bottom: 0.4rem;
+}
+
+.user-dropdown-header-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.user-dropdown-header-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-dropdown-header-key {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.user-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-md);
+  color: var(--text-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: all 0.15s ease;
+}
+
+.user-dropdown-item:hover {
+  background: var(--orange-light);
+  color: var(--orange-primary);
+}
+
+.user-dropdown-item.danger {
+  color: #be123c;
+}
+
+.user-dropdown-item.danger:hover {
+  background: #fff1f2;
+  color: #e11d48;
+}
+
+.user-dropdown-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 0.35rem 0;
+}
+
+/* Mobile backdrop */
+.mobile-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 80;
+  animation: fadeIn 0.2s ease;
 }
 
 .wallet-nav-tabs {
@@ -1876,7 +1979,8 @@ body {
   }
 
   .wallet-modal-card,
-  .app-modal-card {
+  .app-modal-card,
+  .modal-container {
     max-height: calc(100vh - 1.5rem);
     margin: auto 0;
     width: 100%;
@@ -1889,7 +1993,8 @@ body {
   }
 
   .wallet-modal-body,
-  .app-modal-body {
+  .app-modal-body,
+  .modal-body {
     padding: 1.25rem;
   }
 }
@@ -1938,6 +2043,17 @@ body {
     grid-template-columns: 1fr auto;
     gap: 0.65rem;
     width: 100%;
+  }
+
+  .user-dropdown-wrapper {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .user-dropdown-menu {
+    width: 100%;
+    left: 0;
+    right: 0;
   }
 
   .user-profile-badge {
@@ -2082,12 +2198,14 @@ body {
   }
 
   .wallet-modal-header,
-  .app-modal-header {
+  .app-modal-header,
+  .modal-header {
     padding: 1.15rem 1.15rem 0.85rem;
   }
 
   .wallet-modal-body,
-  .app-modal-body {
+  .app-modal-body,
+  .modal-body {
     padding: 1.15rem;
   }
 
